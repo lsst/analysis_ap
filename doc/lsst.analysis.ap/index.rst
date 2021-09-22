@@ -6,7 +6,7 @@
 lsst.analysis.ap
 ################
 
-.. Paragraph that describes what this Python module does and links to related modules and frameworks.
+This package contains scripts and pipelines to compute quality assurance metrics and make plots to study the output products of the alerts pipeline.
 
 .. .. _lsst.analysis.ap-using:
 
