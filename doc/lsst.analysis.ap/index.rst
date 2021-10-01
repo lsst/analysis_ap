@@ -31,17 +31,17 @@ You can find Jira issues for this module under the `analysis_ap <https://jira.ls
 .. .. toctree::
 ..    :maxdepth: 1
 
-.. .. _lsst.analysis.ap-scripts:
+.. _lsst.analysis.ap-scripts:
 
-.. Script reference
-.. ================
+Script reference
+================
 
-.. .. TODO: Add an item to this toctree for each script reference topic in the scripts subdirectory.
+.. toctree::
+   :maxdepth: 1
 
-.. .. toctree::
-..    :maxdepth: 1
+   scripts/zooniverseCutouts
 
-.. .. _lsst.analysis.ap-pyapi:
+.. _lsst.analysis.ap-pyapi:
 
 Python API reference
 ====================
