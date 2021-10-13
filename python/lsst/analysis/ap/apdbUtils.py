@@ -62,23 +62,17 @@ def connectToApdb(dbName, dbType='sqlite', schema=None):
 
 
 def addTableMetadata(sourceTable, butler, instrument='DECam'):
-    """Add visit,detector,instrument columns to sourceTable dataframe.
+    """Add visit,detector,instrument columns to a DiaSource dataframe.
 
     Parameters
     ----------
     sourceTable : `pandas.core.frame.DataFrame`
-        Pandas dataframe with DIA Sources from an APDB.
+        Pandas dataframe with DIA Sources from an APDB; modified in-place.
     butler : `lsst.daf.butler.Butler`
         Butler in the repository corresponding to the output of an ap_pipe run.
     instrument : `str`, optional
         Short name (e.g. "DECam") of instrument to make a dataId unpacker
         and to add to the table columns; supports any gen3 instrument.
-
-    Returns
-    -------
-    sourceTable : `pandas.core.frame.DataFrame`
-        The same as the input sourceTable, with added visit,detector,instrument
-        columns.
 
     Notes
     -----
@@ -91,4 +85,3 @@ def addTableMetadata(sourceTable, butler, instrument='DECam'):
     sourceTable['visit'] = dataId['visit']
     sourceTable['detector'] = dataId['detector']
     sourceTable['instrument'] = instrument
-    return sourceTable
