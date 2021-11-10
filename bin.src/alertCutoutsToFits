@@ -1,0 +1,62 @@
+#! /usr/bin/env python
+
+import io
+import argparse
+import fastavro
+
+
+
+def convertAlertCutouts(avroFile, outputPath):
+    """Read Avro-formatted alert packets and write the cutouts as FITS.
+
+    Parameters
+    ----------
+    avroFile : `str`
+        Path to Avro-formatted alert file
+    outputPath : `str`
+        Path to write FITS-formatted cutouts to
+    """
+
+    with open(avroFile,'rb') as f:
+        freader = fastavro.reader(f)
+        schema = freader.writer_schema
+
+        for packet in freader:
+            diaSourceId = packet['diaSource']['diaSourceId']
+            cutoutTypes = ['cutoutDifference', 'cutoutTemplate', 'cutoutScience'] 
+            for cutoutType in cutoutTypes:
+                if cutoutType in packet:
+                    cutout = packet[cutoutType]
+                    with open(f'{outputPath}/{diaSourceId}_{cutoutType[6:]}.fits','wb') as f:
+                        f.write(cutout)
+
+            
+
+
+def build_argparser():
+    """Construct an argument parser for the ``alertCutoutToFits`` script.
+
+    Returns
+    -------
+    argparser : `argparse.ArgumentParser`
+        The argument parser that defines the ``alertCutoutToFits``
+        command-line interface.
+    """
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='More information is available at https://pipelines.lsst.io.'
+    )
+
+    parser.add_argument("avroFile",
+                        help="Path to Avro-formatted alerts.")
+    parser.add_argument("outputPath",
+                        help="Path to write the output FITS images to.")
+    return parser
+
+def main():
+    args = build_argparser().parse_args()
+    convertAlertCutouts(args.avroFile, args.outputPath)
+
+if __name__ == "__main__":
+    main()
