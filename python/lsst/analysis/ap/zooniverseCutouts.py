@@ -36,7 +36,7 @@ import lsst.pex.config as pexConfig
 import lsst.pipe.base
 import pandas as pd
 
-from . import apdbUtils
+from . import legacyApdbUtils
 
 
 class ZooniverseCutoutsConfig(pexConfig.Config):
@@ -54,7 +54,7 @@ class ZooniverseCutoutsConfig(pexConfig.Config):
     )
     diffImageType = pexConfig.Field(
         doc="Dataset type of template and difference image to use for cutouts; "
-        "Will have '_warpedExp' and '_differenceExp' appended for butler.get(), respectively.",
+            "Will have '_templateExp' and '_differenceExp' appended for butler.get(), respectively.",
         dtype=str,
         default="deepDiff",
     )
@@ -163,12 +163,10 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             systems, or get good butler-side caching, we could remove the
             lru_cache above.
             """
-            dataId = {"instrument": instrument, "detector": detector, "visit": visit}
-            return (
-                butler.get("calexp", dataId),
-                butler.get(f"{self.config.diffImageType}_warpedExp", dataId),
-                butler.get(f"{self.config.diffImageType}_differenceExp", dataId),
-            )
+            dataId = {'instrument': instrument, 'detector': detector, 'visit': visit}
+            return (butler.get('calexp', dataId),
+                    butler.get(f'{self.config.diffImageType}_templateExp', dataId),
+                    butler.get(f'{self.config.diffImageType}_differenceExp', dataId))
 
         # Create a subdirectory for the images.
         pathlib.Path(os.path.join(outputPath, "images")).mkdir(exist_ok=True)
@@ -366,11 +364,12 @@ def select_sources(dbName, dbType, schema, butler, instrument, n):
     sources : `pandas.DataFrame`
         The loaded DiaSource data.
     """
-    connection = apdbUtils.connectToApdb(dbName, dbType, schema)
+    connection = legacyApdbUtils.connectToApdb(dbName, dbType, schema)
     sources = pd.read_sql_query(
-        f'select * from "DiaSource" ORDER BY RANDOM() LIMIT {n};', connection
-    )
-    apdbUtils.addTableMetadata(sources, instrument=instrument, butler=butler)
+        f'select * from "DiaSource" ORDER BY RANDOM() LIMIT {n};', connection)
+    legacyApdbUtils.addTableMetadata(sources,
+                                     butler=butler,
+                                     instrument=instrument)
     return sources
 
 
