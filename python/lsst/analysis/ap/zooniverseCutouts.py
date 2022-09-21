@@ -30,11 +30,11 @@ import io
 import logging
 import os
 import pathlib
-import pandas as pd
 
 import lsst.dax.apdb
 import lsst.pex.config as pexConfig
 import lsst.pipe.base
+import pandas as pd
 
 from . import apdbUtils
 
@@ -43,24 +43,24 @@ class ZooniverseCutoutsConfig(pexConfig.Config):
     size = pexConfig.Field(
         doc="Width of cutout to extract for image from science, template, and difference exposures.",
         dtype=int,
-        default=30
+        default=30,
     )
     urlRoot = pexConfig.Field(
         doc="URL that the resulting images will be served to Zooniverse from, for the manifest file.",
         dtype=str,
-        optional=False
+        optional=False,
     )
     diffImageType = pexConfig.Field(
         doc="Dataset type of template and difference image to use for cutouts; "
-            "Will have '_warpedExp' and '_differenceExp' appended for butler.get(), respectively.",
+        "Will have '_warpedExp' and '_differenceExp' appended for butler.get(), respectively.",
         dtype=str,
-        default="deepDiff"
+        default="deepDiff",
     )
 
 
 class ZooniverseCutoutsTask(lsst.pipe.base.Task):
-    """Generate cutouts and a manifest for upload to a Zooniverse project.
-    """
+    """Generate cutouts and a manifest for upload to a Zooniverse project."""
+
     ConfigClass = ZooniverseCutoutsConfig
     _DefaultName = "zooniverseCutouts"
 
@@ -117,9 +117,11 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             The formatted URL manifest for upload to Zooniverse.
         """
         manifest = pd.DataFrame()
-        manifest['external_id'] = sources
-        manifest['location:1'] = [self._make_path(x, self.config.urlRoot.rstrip('/')) for x in sources]
-        manifest['metadata:diaSourceId'] = sources
+        manifest["external_id"] = sources
+        manifest["location:1"] = [
+            self._make_path(x, self.config.urlRoot.rstrip("/")) for x in sources
+        ]
+        manifest["metadata:diaSourceId"] = sources
         return manifest
 
     def write_images(self, data, butler, outputPath):
@@ -141,6 +143,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             The path to write the output to; manifest goes here, while the
             images themselves go into ``outputPath/images/``.
         """
+
         @functools.lru_cache(maxsize=16)
         def get_exposures(instrument, detector, visit):
             """Return science, template, difference exposures, and use a small
@@ -153,10 +156,12 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             systems, or get good butler-side caching, we could remove the
             lru_cache above.
             """
-            dataId = {'instrument': instrument, 'detector': detector, 'visit': visit}
-            return (butler.get('calexp', dataId),
-                    butler.get(f'{self.config.diffImageType}_warpedExp', dataId),
-                    butler.get(f'{self.config.diffImageType}_differenceExp', dataId))
+            dataId = {"instrument": instrument, "detector": detector, "visit": visit}
+            return (
+                butler.get("calexp", dataId),
+                butler.get(f"{self.config.diffImageType}_warpedExp", dataId),
+                butler.get(f"{self.config.diffImageType}_differenceExp", dataId),
+            )
 
         # Create a subdirectory for the images.
         pathlib.Path(os.path.join(outputPath, "images")).mkdir(exist_ok=True)
@@ -164,16 +169,22 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         result = []
         for index, source in data.iterrows():
             try:
-                center = lsst.geom.SpherePoint(source['ra'], source['decl'], lsst.geom.degrees)
-                science, template, difference = get_exposures(source['instrument'],
-                                                              source['detector'],
-                                                              source['visit'])
+                center = lsst.geom.SpherePoint(
+                    source["ra"], source["decl"], lsst.geom.degrees
+                )
+                science, template, difference = get_exposures(
+                    source["instrument"], source["detector"], source["visit"]
+                )
                 image = self.generate_image(science, template, difference, center)
-                with open(self._make_path(source.loc['diaSourceId'], outputPath), "wb") as outfile:
+                with open(
+                    self._make_path(source.loc["diaSourceId"], outputPath), "wb"
+                ) as outfile:
                     outfile.write(image.getbuffer())
-                result.append(source.loc['diaSourceId'])
+                result.append(source.loc["diaSourceId"])
             except LookupError as e:
-                self.log.error(f"{e.__class__.__name__} processing diaSourceId {source['diaSourceId']}: {e}")
+                self.log.error(
+                    f"{e.__class__.__name__} processing diaSourceId {source['diaSourceId']}: {e}"
+                )
         return result
 
     def generate_image(self, science, template, difference, center):
@@ -196,10 +207,11 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             The generated image, to be output to a file or displayed on screen.
         """
         size = lsst.geom.Extent2I(self.config.size, self.config.size)
-        return self._plot_cutout(science.getCutout(center, size),
-                                 template.getCutout(center, size),
-                                 difference.getCutout(center, size)
-                                 )
+        return self._plot_cutout(
+            science.getCutout(center, size),
+            template.getCutout(center, size),
+            difference.getCutout(center, size),
+        )
 
     def _plot_cutout(self, science, template, difference):
         """Plot the cutouts for a source in one image.
@@ -219,22 +231,26 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             The generated image, to be output to a file via
             `image.write(filename)` or displayed on screen.
         """
+        import astropy.visualization as aviz
         import matplotlib.pyplot as plt
         from matplotlib import cm
-        import astropy.visualization as aviz
 
         # TODO DM-32014: how do we color masked pixels (including edges)?
 
         def plot_one_image(ax, data, name):
             """Plot a normalized image on an axis."""
-            if name == 'Difference':
-                norm = aviz.ImageNormalize(data, interval=aviz.ZScaleInterval(),
-                                           stretch=aviz.LinearStretch())
+            if name == "Difference":
+                norm = aviz.ImageNormalize(
+                    data, interval=aviz.ZScaleInterval(), stretch=aviz.LinearStretch()
+                )
             else:
-                norm = aviz.ImageNormalize(data, interval=aviz.MinMaxInterval(),
-                                           stretch=aviz.AsinhStretch(a=0.1))
+                norm = aviz.ImageNormalize(
+                    data,
+                    interval=aviz.MinMaxInterval(),
+                    stretch=aviz.AsinhStretch(a=0.1),
+                )
             ax.imshow(data, cmap=cm.bone, interpolation="none", norm=norm)
-            ax.axis('off')
+            ax.axis("off")
             ax.set_title(name)
 
         try:
@@ -265,33 +281,57 @@ def build_argparser():
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='More information is available at https://pipelines.lsst.io.'
+        epilog="More information is available at https://pipelines.lsst.io.",
     )
 
     apdbArgs = parser.add_argument_group("apdb connection")
-    apdbArgs.add_argument("--dbName", required=True,
-                          help="Full path (sqlite) or name on lsst-pg-devl (postgres) of the APDB to load.")
-    apdbArgs.add_argument("--dbType", default="sqlite", choices=["sqlite", "postgres"],
-                          help="Type of database to connect to.")
-    apdbArgs.add_argument("--schema",
-                          help="Schema to connect to; only for 'dbName=postgres'.")
+    apdbArgs.add_argument(
+        "--dbName",
+        required=True,
+        help="Full path (sqlite) or name on lsst-pg-devl (postgres) of the APDB to load.",
+    )
+    apdbArgs.add_argument(
+        "--dbType",
+        default="sqlite",
+        choices=["sqlite", "postgres"],
+        help="Type of database to connect to.",
+    )
+    apdbArgs.add_argument(
+        "--schema", help="Schema to connect to; only for 'dbName=postgres'."
+    )
 
-    parser.add_argument("-n", default=1000, type=int,
-                        help="Number of sources to load randomly from the APDB.")
+    parser.add_argument(
+        "-n",
+        default=1000,
+        type=int,
+        help="Number of sources to load randomly from the APDB.",
+    )
 
-    parser.add_argument("--instrument", required=True,
-                        help="Instrument short-name (e.g. 'DECam') of the data being loaded.")
-    parser.add_argument("-C", "--configFile",
-                        help="File containing the ZooniverseCutoutsConfig to load.")
-    parser.add_argument("--collections", nargs="*",
-                        help=("Butler collection(s) to load data from."
-                              " If not specified, will search all butler collections, "
-                              "which may be very slow."))
-    parser.add_argument("repo",
-                        help="Path to Butler repository to load data from.")
-    parser.add_argument("outputPath",
-                        help="Path to write the output images and manifest to; "
-                        "manifest is written here, while the images go to `OUTPUTPATH/images/`.")
+    parser.add_argument(
+        "--instrument",
+        required=True,
+        help="Instrument short-name (e.g. 'DECam') of the data being loaded.",
+    )
+    parser.add_argument(
+        "-C",
+        "--configFile",
+        help="File containing the ZooniverseCutoutsConfig to load.",
+    )
+    parser.add_argument(
+        "--collections",
+        nargs="*",
+        help=(
+            "Butler collection(s) to load data from."
+            " If not specified, will search all butler collections, "
+            "which may be very slow."
+        ),
+    )
+    parser.add_argument("repo", help="Path to Butler repository to load data from.")
+    parser.add_argument(
+        "outputPath",
+        help="Path to write the output images and manifest to; "
+        "manifest is written here, while the images go to `OUTPUTPATH/images/`.",
+    )
     return parser
 
 
@@ -320,7 +360,9 @@ def select_sources(dbName, dbType, schema, butler, instrument, n):
         The loaded DiaSource data.
     """
     connection = apdbUtils.connectToApdb(dbName, dbType, schema)
-    sources = pd.read_sql_query(f'select * from "DiaSource" ORDER BY RANDOM() LIMIT {n};', connection)
+    sources = pd.read_sql_query(
+        f'select * from "DiaSource" ORDER BY RANDOM() LIMIT {n};', connection
+    )
     apdbUtils.addTableMetadata(sources, instrument=instrument, butler=butler)
     return sources
 
@@ -334,10 +376,14 @@ def run_cutouts(args):
         The parsed commandline arguments.
     """
     # We have to initialize the logger manually on the commandline.
-    logging.basicConfig(level=logging.INFO, format="{name} {levelname}: {message}", style="{")
+    logging.basicConfig(
+        level=logging.INFO, format="{name} {levelname}: {message}", style="{"
+    )
 
     butler = lsst.daf.butler.Butler(args.repo, collections=args.collections)
-    data = select_sources(args.dbName, args.dbType, args.schema, butler, args.instrument, args.n)
+    data = select_sources(
+        args.dbName, args.dbType, args.schema, butler, args.instrument, args.n
+    )
 
     config = ZooniverseCutoutsConfig()
     if args.configFile is not None:

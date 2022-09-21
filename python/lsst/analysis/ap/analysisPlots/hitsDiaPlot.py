@@ -32,19 +32,24 @@ class HitsDiaPlot(AnalysisPlot):
 
     It makes two panels that make the HiTS fields look pretty.
     """
+
     def setDefaults(self):
         super().setDefaults()
 
         # Filter data into `ra1s` and `dec1s` for one panel,
         # and `ra2s` and `dec2s` for the other`
-        self.process.buildActions.ra1s = DownselectVector(vectorKey='ra',
-                                                          selector=RangeSelector(column='dec', maximum=-2))
-        self.process.buildActions.dec1s = DownselectVector(vectorKey='dec',
-                                                           selector=RangeSelector(column='dec', maximum=-2))
-        self.process.buildActions.ra2s = DownselectVector(vectorKey='ra',
-                                                          selector=RangeSelector(column='dec', minimum=-2))
-        self.process.buildActions.dec2s = DownselectVector(vectorKey='dec',
-                                                           selector=RangeSelector(column='dec', minimum=-2))
+        self.process.buildActions.ra1s = DownselectVector(
+            vectorKey="ra", selector=RangeSelector(column="dec", maximum=-2)
+        )
+        self.process.buildActions.dec1s = DownselectVector(
+            vectorKey="dec", selector=RangeSelector(column="dec", maximum=-2)
+        )
+        self.process.buildActions.ra2s = DownselectVector(
+            vectorKey="ra", selector=RangeSelector(column="dec", minimum=-2)
+        )
+        self.process.buildActions.dec2s = DownselectVector(
+            vectorKey="dec", selector=RangeSelector(column="dec", minimum=-2)
+        )
 
         self.produce = DiaSkyPlot()
 
