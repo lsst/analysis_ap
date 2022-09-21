@@ -1,0 +1,12 @@
+description: |
+  Tier 1 AP plots and metrics to assess quality on a DECam HiTS rerun
+tasks:
+  analyzeDiaSourceTableCore:
+    class: lsst.analysis.tools.tasks.DiaSourceTableCcdVisitAnalysisTask
+    config:
+      metrics.numSsObjects: NumSsObjectsMetric
+      connections.outputName: diaSourceTableCore
+      plots.hitsDiaPlot: HitsDiaPlot
+      python: |
+        from lsst.analysis.tools.analysisMetrics import *
+        from lsst.analysis.ap.analysisPlots import *
