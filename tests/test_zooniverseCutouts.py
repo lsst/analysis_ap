@@ -20,34 +20,38 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import os
-import pandas as pd
-import PIL
 import sys
-import unittest
 import tempfile
+import unittest
 
 import lsst.afw.table
 import lsst.geom
 import lsst.meas.base.tests
-from lsst.pex.config import FieldValidationError
 import lsst.utils.tests
-
+import pandas as pd
+import PIL
 from lsst.analysis.ap import zooniverseCutouts
+from lsst.pex.config import FieldValidationError
 
 
 class TestZooniverseCutouts(lsst.utils.tests.TestCase):
     """Test that ZooniverseCutoutsTask generates images and manifest files
     correctly.
     """
+
     def setUp(self):
         bbox = lsst.geom.Box2I(lsst.geom.Point2I(0, 0), lsst.geom.Point2I(100, 100))
         self.centroid = lsst.geom.Point2D(65, 70)
         dataset = lsst.meas.base.tests.TestDataset(bbox)
         dataset.addSource(instFlux=1e5, centroid=self.centroid)
-        self.science, self.scienceCat = dataset.realize(noise=1000.0, schema=dataset.makeMinimalSchema())
+        self.science, self.scienceCat = dataset.realize(
+            noise=1000.0, schema=dataset.makeMinimalSchema()
+        )
         lsst.afw.table.updateSourceCoords(self.science.wcs, self.scienceCat)
         self.skyCenter = self.scienceCat[0].getCoord()
-        self.template, self.templateCat = dataset.realize(noise=5.0, schema=dataset.makeMinimalSchema())
+        self.template, self.templateCat = dataset.realize(
+            noise=5.0, schema=dataset.makeMinimalSchema()
+        )
         # A simple image difference to have something to plot.
         self.difference = lsst.afw.image.ExposureF(self.science, deep=True)
         self.difference.image -= self.template.image
@@ -59,8 +63,9 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
             im.show()
         """
         cutouts = zooniverseCutouts.ZooniverseCutoutsTask()
-        cutout = cutouts.generate_image(self.science, self.template, self.difference,
-                                        self.skyCenter)
+        cutout = cutouts.generate_image(
+            self.science, self.template, self.difference, self.skyCenter
+        )
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
             # im.show()
@@ -76,8 +81,9 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
         config.size = 100
         cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
-        cutout = cutouts.generate_image(self.science, self.template, self.difference,
-                                        self.skyCenter)
+        cutout = cutouts.generate_image(
+            self.science, self.template, self.difference, self.skyCenter
+        )
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
             # im.show()
@@ -88,12 +94,16 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
 
     def test_write_images(self):
         """Test that images get written to a temporary directory."""
-        data = pd.DataFrame(data={"diaSourceId": [5, 10],
-                                  "ra": [45.001, 45.002],
-                                  "decl": [45.0, 45.001],
-                                  "detector": [50, 60],
-                                  "visit": [1234, 5678],
-                                  "instrument": ["mockCam", "mockCam"]})
+        data = pd.DataFrame(
+            data={
+                "diaSourceId": [5, 10],
+                "ra": [45.001, 45.002],
+                "decl": [45.0, 45.001],
+                "detector": [50, 60],
+                "visit": [1234, 5678],
+                "instrument": ["mockCam", "mockCam"],
+            }
+        )
         butler = unittest.mock.Mock(spec=lsst.daf.butler.Butler)
         # we don't care what the output images look like here, just that
         # butler.get() returns an Exposure for every call.
@@ -103,7 +113,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
             config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
             cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
             result = cutouts.write_images(data, butler, path)
-            self.assertEqual(result, list(data['diaSourceId']))
+            self.assertEqual(result, list(data["diaSourceId"]))
             for file in ("images/5.png", "images/10.png"):
                 filename = os.path.join(path, file)
                 self.assertTrue(os.path.exists(filename))
@@ -111,14 +121,17 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
                     self.assertEqual(image.format, "PNG")
 
     def test_write_images_exception(self):
-        """Test that write_images() catches errors in loading data.
-        """
-        data = pd.DataFrame(data={"diaSourceId": [5, 10],
-                                  "ra": [45.001, 45.002],
-                                  "decl": [45.0, 45.001],
-                                  "detector": [50, 60],
-                                  "visit": [1234, 5678],
-                                  "instrument": ["mockCam", "mockCam"]})
+        """Test that write_images() catches errors in loading data."""
+        data = pd.DataFrame(
+            data={
+                "diaSourceId": [5, 10],
+                "ra": [45.001, 45.002],
+                "decl": [45.0, 45.001],
+                "detector": [50, 60],
+                "visit": [1234, 5678],
+                "instrument": ["mockCam", "mockCam"],
+            }
+        )
         butler = unittest.mock.Mock(spec=lsst.daf.butler.Butler)
         err = "Dataset not found"
         butler.get.side_effect = LookupError(err)
@@ -129,40 +142,46 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
 
             with self.assertLogs("zooniverseCutouts", "ERROR") as cm:
                 cutouts.write_images(data, butler, path)
-            self.assertIn("LookupError processing diaSourceId 5: Dataset not found", cm.output[0])
-            self.assertIn("LookupError processing diaSourceId 10: Dataset not found", cm.output[1])
+            self.assertIn(
+                "LookupError processing diaSourceId 5: Dataset not found", cm.output[0]
+            )
+            self.assertIn(
+                "LookupError processing diaSourceId 10: Dataset not found", cm.output[1]
+            )
 
     def check_make_manifest(self, url_root, url_list):
-        """Check that make_manifest returns an appropriate DataFrame.
-        """
+        """Check that make_manifest returns an appropriate DataFrame."""
         data = [5, 10, 20]
         config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
         config.urlRoot = url_root
         cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
         manifest = cutouts.make_manifest(data)
-        self.assertEqual(manifest['metadata:diaSourceId'].to_list(),
-                         [5, 10, 20])
-        self.assertEqual(manifest['location:1'].to_list(), url_list)
+        self.assertEqual(manifest["metadata:diaSourceId"].to_list(), [5, 10, 20])
+        self.assertEqual(manifest["location:1"].to_list(), url_list)
 
     def test_make_manifest(self):
         # check without an ending slash
         root = "http://example.org/zooniverse"
-        url_list = [f"{root}/images/5.png",
-                    f"{root}/images/10.png",
-                    f"{root}/images/20.png"]
+        url_list = [
+            f"{root}/images/5.png",
+            f"{root}/images/10.png",
+            f"{root}/images/20.png",
+        ]
         self.check_make_manifest(root, url_list)
 
         # check with an ending slash
         root = "http://example.org/zooniverse/"
-        url_list = [f"{root}images/5.png",
-                    f"{root}images/10.png",
-                    f"{root}images/20.png"]
+        url_list = [
+            f"{root}images/5.png",
+            f"{root}images/10.png",
+            f"{root}images/20.png",
+        ]
         self.check_make_manifest(root, url_list)
 
 
 class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
-    """Test the commandline interface main() function via mocks.
-    """
+    """Test the commandline interface main() function via mocks."""
+
     def setUp(self):
         datadir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/")
         self.dbName = os.path.join(datadir, "apdb.sqlite3")
@@ -179,58 +198,64 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
         butlerPatch = unittest.mock.patch("lsst.daf.butler.Butler")
         self._butler = butlerPatch.start()
         # mock detector/visit unpacker, until detector/visit are in APDB.
-        self._butler.return_value.registry.dimensions.makePacker.return_value.unpack = mock_unpacker
+        self._butler.return_value.registry.dimensions.makePacker.return_value.unpack = (
+            mock_unpacker
+        )
         self.addCleanup(butlerPatch.stop)
 
     def test_main_args(self):
-        """Test typical arguments to main().
-        """
-        args = ["zooniverseCutouts",
-                f"--dbName={self.dbName}",
-                f"--collections={self.collection}",
-                f"-C={self.configFile}",
-                f"--instrument={self.instrument}",
-                self.repo,
-                self.outputPath
-                ]
-        with unittest.mock.patch.object(zooniverseCutouts.ZooniverseCutoutsTask, "run",
-                                        autospec=True) as run, \
-                unittest.mock.patch.object(sys, "argv", args):
+        """Test typical arguments to main()."""
+        args = [
+            "zooniverseCutouts",
+            f"--dbName={self.dbName}",
+            f"--collections={self.collection}",
+            f"-C={self.configFile}",
+            f"--instrument={self.instrument}",
+            self.repo,
+            self.outputPath,
+        ]
+        with unittest.mock.patch.object(
+            zooniverseCutouts.ZooniverseCutoutsTask, "run", autospec=True
+        ) as run, unittest.mock.patch.object(sys, "argv", args):
             zooniverseCutouts.main()
             self.assertEqual(self._butler.call_args.args, (self.repo,))
-            self.assertEqual(self._butler.call_args.kwargs, {"collections": [self.collection]})
+            self.assertEqual(
+                self._butler.call_args.kwargs, {"collections": [self.collection]}
+            )
             # NOTE: can't easily test the `data` arg to run, as select_sources
             # reads in a random order every time.
             self.assertEqual(run.call_args.args[2], self._butler.return_value)
             self.assertEqual(run.call_args.args[3], self.outputPath)
 
     def test_main_args_no_config_fails(self):
-        """Test that not passing a config file fails because urlRoot is None.
-        """
-        args = ["zooniverseCutouts",
-                f"--dbName={self.dbName}",
-                f"--collections={self.collection}",
-                f"--instrument={self.instrument}",
-                self.repo,
-                self.outputPath
-                ]
-        with unittest.mock.patch.object(sys, "argv", args), \
-                self.assertRaisesRegex(FieldValidationError, "Field 'urlRoot' failed validation"):
+        """Test that not passing a config file fails because urlRoot
+        is None."""
+        args = [
+            "zooniverseCutouts",
+            f"--dbName={self.dbName}",
+            f"--collections={self.collection}",
+            f"--instrument={self.instrument}",
+            self.repo,
+            self.outputPath,
+        ]
+        with unittest.mock.patch.object(sys, "argv", args), self.assertRaisesRegex(
+            FieldValidationError, "Field 'urlRoot' failed validation"
+        ):
             zooniverseCutouts.main()
 
     def test_main_args_no_collections(self):
-        """Test with no collections argument.
-        """
-        args = ["zooniverseCutouts",
-                f"--dbName={self.dbName}",
-                f"-C={self.configFile}",
-                f"--instrument={self.instrument}",
-                self.repo,
-                self.outputPath
-                ]
-        with unittest.mock.patch.object(zooniverseCutouts.ZooniverseCutoutsTask, "run",
-                                        autospec=True) as run, \
-                unittest.mock.patch.object(sys, "argv", args):
+        """Test with no collections argument."""
+        args = [
+            "zooniverseCutouts",
+            f"--dbName={self.dbName}",
+            f"-C={self.configFile}",
+            f"--instrument={self.instrument}",
+            self.repo,
+            self.outputPath,
+        ]
+        with unittest.mock.patch.object(
+            zooniverseCutouts.ZooniverseCutoutsTask, "run", autospec=True
+        ) as run, unittest.mock.patch.object(sys, "argv", args):
             zooniverseCutouts.main()
             self.assertEqual(self._butler.call_args.args, (self.repo,))
             self.assertEqual(self._butler.call_args.kwargs, {"collections": None})
@@ -238,23 +263,26 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
             self.assertEqual(run.call_args.args[3], self.outputPath)
 
     def test_main_collection_list(self):
-        """Test passing a list of collections.
-        """
+        """Test passing a list of collections."""
         collections = ["mock1", "mock2", "mock3"]
-        args = ["zooniverseCutouts",
-                f"--dbName={self.dbName}",
-                f"--instrument={self.instrument}",
-                self.repo,
-                self.outputPath,
-                f"-C={self.configFile}",
-                "--collections"]
+        args = [
+            "zooniverseCutouts",
+            f"--dbName={self.dbName}",
+            f"--instrument={self.instrument}",
+            self.repo,
+            self.outputPath,
+            f"-C={self.configFile}",
+            "--collections",
+        ]
         args.extend(collections)
-        with unittest.mock.patch.object(zooniverseCutouts.ZooniverseCutoutsTask, "run",
-                                        autospec=True) as run, \
-                unittest.mock.patch.object(sys, "argv", args):
+        with unittest.mock.patch.object(
+            zooniverseCutouts.ZooniverseCutoutsTask, "run", autospec=True
+        ) as run, unittest.mock.patch.object(sys, "argv", args):
             zooniverseCutouts.main()
             self.assertEqual(self._butler.call_args.args, (self.repo,))
-            self.assertEqual(self._butler.call_args.kwargs, {"collections": collections})
+            self.assertEqual(
+                self._butler.call_args.kwargs, {"collections": collections}
+            )
             self.assertEqual(run.call_args.args[2], self._butler.return_value)
             self.assertEqual(run.call_args.args[3], self.outputPath)
 

@@ -25,10 +25,11 @@
 __all__ = ["connectToApdb", "addTableMetadata"]
 
 import sqlite3
+
 import psycopg2
 
 
-def connectToApdb(dbName, dbType='sqlite', schema=None):
+def connectToApdb(dbName, dbType="sqlite", schema=None):
     """Connect to an sqlite or postgres APDB.
 
     Parameters
@@ -46,22 +47,22 @@ def connectToApdb(dbName, dbType='sqlite', schema=None):
     connection : `psycopg2.connect` or `sqlite3.Connection`
         A connection object to a database instance, ready for queries
     """
-    if dbType == 'sqlite':
+    if dbType == "sqlite":
         connection = sqlite3.connect(dbName)
-    elif dbType == 'postgres':
+    elif dbType == "postgres":
         if schema is None:
-            raise RuntimeError('Schema must be set for postgres APDB')
-        host = 'lsst-pg-devel1.ncsa.illinois.edu'
-        connection = psycopg2.connect(dbname=dbName,
-                                      host=host,
-                                      options=f'-c search_path={schema}')
+            raise RuntimeError("Schema must be set for postgres APDB")
+        host = "lsst-pg-devel1.ncsa.illinois.edu"
+        connection = psycopg2.connect(
+            dbname=dbName, host=host, options=f"-c search_path={schema}"
+        )
     else:
-        raise ValueError(f'dbType must be sqlite or postgres, not {dbType}')
+        raise ValueError(f"dbType must be sqlite or postgres, not {dbType}")
 
     return connection
 
 
-def addTableMetadata(sourceTable, butler, instrument='DECam'):
+def addTableMetadata(sourceTable, butler, instrument="DECam"):
     """Add visit,detector,instrument columns to a DiaSource dataframe.
 
     Parameters
@@ -82,6 +83,6 @@ def addTableMetadata(sourceTable, butler, instrument='DECam'):
     instrumentDataId = butler.registry.expandDataId(instrument=instrument)
     packer = butler.registry.dimensions.makePacker("visit_detector", instrumentDataId)
     dataId = packer.unpack(sourceTable.ccdVisitId)
-    sourceTable['visit'] = dataId['visit']
-    sourceTable['detector'] = dataId['detector']
-    sourceTable['instrument'] = instrument
+    sourceTable["visit"] = dataId["visit"]
+    sourceTable["detector"] = dataId["detector"]
+    sourceTable["instrument"] = instrument
