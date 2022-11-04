@@ -10,6 +10,7 @@ setupRequired(meas_base)
 setupRequired(pex_config)
 setupRequired(pipe_base)
 setupRequired(utils)
+setupRequired(analysis_tools)
 
 # The following is boilerplate for all packages.
 # See https://dmtn-001.lsst.io for details on LSST_LIBRARY_PATH.
