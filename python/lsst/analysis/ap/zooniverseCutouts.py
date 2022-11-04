@@ -31,6 +31,8 @@ import logging
 import os
 import pathlib
 
+import astropy.units as u
+
 import lsst.dax.apdb
 import lsst.pex.config as pexConfig
 import lsst.pipe.base
@@ -57,6 +59,11 @@ class ZooniverseCutoutsConfig(pexConfig.Config):
             "Will have '_templateExp' and '_differenceExp' appended for butler.get(), respectively.",
         dtype=str,
         default="deepDiff",
+    )
+    addMetadata = pexConfig.Field(
+        doc="Annotate the cutouts with catalog metadata, including coordinates, fluxes, flags, etc.",
+        dtype=bool,
+        default=False
     )
 
 
@@ -180,7 +187,8 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
                 science, template, difference = get_exposures(
                     source["instrument"], source["detector"], source["visit"]
                 )
-                image = self.generate_image(science, template, difference, center)
+                image = self.generate_image(science, template, difference, center,
+                                            source=source if self.config.addMetadata else None)
                 with open(
                     self._make_path(source.loc["diaSourceId"], outputPath), "wb"
                 ) as outfile:
@@ -192,7 +200,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
                 )
         return result
 
-    def generate_image(self, science, template, difference, center):
+    def generate_image(self, science, template, difference, center, source=None):
         """Get a 3-part cutout image to save to disk, for a single source.
 
         Parameters
@@ -205,6 +213,8 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
              Matched science minus template exposure to include in the cutout.
         center : `lsst.geom.SpherePoint`
             Center of the source to be cut out of each image.
+        source : `pandas.Series`, optional
+            DiaSource record for this cutout, to add metadata to the image.
 
         Returns
         -------
@@ -216,9 +226,10 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             science.getCutout(center, size),
             template.getCutout(center, size),
             difference.getCutout(center, size),
+            source=source
         )
 
-    def _plot_cutout(self, science, template, difference):
+    def _plot_cutout(self, science, template, difference, source=None):
         """Plot the cutouts for a source in one image.
 
         Parameters
@@ -229,6 +240,8 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             Cutout template exposure to include in the image.
         difference : `lsst.afw.image.ExposureF`
              Cutout science minus template exposure to include in the image.
+        source : `pandas.Series`, optional
+            DiaSource record for this cutout, to add metadata to the image.
 
         Returns
         -------
@@ -237,6 +250,10 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             `image.write(filename)` or displayed on screen.
         """
         import astropy.visualization as aviz
+        import matplotlib
+        matplotlib.use("AGG")
+        # Force matplotlib defaults
+        matplotlib.rcParams.update(matplotlib.rcParamsDefault)
         import matplotlib.pyplot as plt
         from matplotlib import cm
 
@@ -259,11 +276,13 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             ax.set_title(name)
 
         try:
-            fig, (ax1, ax2, ax3) = plt.subplots(1, 3)
+            fig, (ax1, ax2, ax3) = plt.subplots(1, 3, constrained_layout=True)
             plot_one_image(ax1, template.image.array, "Template")
             plot_one_image(ax2, science.image.array, "Science")
             plot_one_image(ax3, difference.image.array, "Difference")
             plt.tight_layout()
+            if source is not None:
+                _annotate_image(fig, source)
 
             output = io.BytesIO()
             plt.savefig(output, bbox_inches="tight", format="png")
@@ -272,6 +291,105 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             plt.close(fig)
 
         return output
+
+
+def _annotate_image(fig, source):
+    """Annotate the cutouts image with metadata and flags.
+
+    Parameters
+    ----------
+    fig : `matplotlib.Figure`
+        Figure to be annotated.
+    source : `pandas.DataFrame`
+        DiaSource record of the object being plotted.
+    """
+    text_color = "grey"
+    # NOTE: fig.text coordinates are in fractions of the figure.
+    fig.text(0, 0.95, "diaSourceId:", color=text_color)
+    fig.text(0.145, 0.95, f"{source['diaSourceId']}")
+    fig.text(0.43, 0.95, f"{source['instrument']}", fontweight="bold")
+    fig.text(0.64, 0.95, "detector:", color=text_color)
+    fig.text(0.74, 0.95, f"{source['detector']}")
+    fig.text(0.795, 0.95, "visit:", color=text_color)
+    fig.text(0.85, 0.95, f"{source['visit']}")
+    fig.text(0.95, 0.95, f"{source['filterName']}")
+
+    fig.text(0.0, 0.91, "ra:", color=text_color)
+    fig.text(0.037, 0.91, f"{source['ra']:.8f}")
+    fig.text(0.21, 0.91, "dec:", color=text_color)
+    fig.text(0.265, 0.91, f"{source['decl']:+.8f}")
+    fig.text(0.50, 0.91, "detection S/N:", color=text_color)
+    fig.text(0.66, 0.91, f"{source['snr']:6.1f}")
+    fig.text(0.75, 0.91, "PSF chi2:", color=text_color)
+    fig.text(0.85, 0.91, f"{source['psChi2']/source['psNdata']:6.2f}")
+
+    # color the PSF label if any PSF fitter flag is set
+    if source['flags'] & 17 or source['flags'] & 18 or source['flags'] & 19:
+        psf_color = "red"
+    else:
+        psf_color = text_color
+    fig.text(0.0, 0.87, "PSF (nJy):", color=psf_color)
+    fig.text(0.25, 0.87, f"{source['psFlux']:8.1f}", horizontalalignment='right')
+    fig.text(0.252, 0.87, "+/-", color=text_color)
+    fig.text(0.29, 0.87, f"{source['psFluxErr']:8.1f}")
+    fig.text(0.40, 0.87, "S/N:", color=text_color)
+    fig.text(0.45, 0.87, f"{abs(source['psFlux']/source['psFluxErr']):6.2f}")
+
+    # NOTE: yellow is hard to read on white; use goldenrod instead.
+    if source['flags'] & 2:
+        fig.text(0.55, 0.87, "EDGE", color="goldenrod", fontweight="bold")
+    # combine interpolated and interpolatedCenter flags
+    if source['flags'] & 3 or source['flags'] & 8:
+        fig.text(0.62, 0.87, "INTERP", color="green", fontweight="bold")
+    # combine saturated and saturatedCenter flags
+    if source['flags'] & 4 or source['flags'] & 9:
+        fig.text(0.72, 0.87, "SAT", color="green", fontweight="bold")
+    # combine cosmicray and cosmicrayCenter flags
+    if source['flags'] & 5 or source['flags'] & 10:
+        fig.text(0.77, 0.87, "CR", color="magenta", fontweight="bold")
+    if source['flags'] & 6:
+        fig.text(0.81, 0.87, "BAD", color="red", fontweight="bold")
+    if source['isDipole']:
+        fig.text(0.87, 0.87, "DIPOLE", color="indigo", fontweight="bold")
+
+    # color the aperture flux label if any aperture flag is set
+    if source['flags'] & 15 or source['flags'] & 16:
+        ap_color = "red"
+    else:
+        ap_color = text_color
+    fig.text(0.0, 0.83, "ap (nJy):", color=ap_color)
+    fig.text(0.25, 0.83, f"{source['apFlux']:8.1f}", horizontalalignment='right')
+    fig.text(0.252, 0.83, "+/-", color=text_color)
+    fig.text(0.29, 0.83, f"{source['apFluxErr']:8.1f}")
+    fig.text(0.40, 0.83, "S/N:", color=text_color)
+    fig.text(0.45, 0.83, f"{abs(source['apFlux']/source['apFluxErr']):#6.2f}")
+
+    # combine suspect and suspectCenter flags
+    if source['flags'] & 7 or source['flags'] & 11:
+        fig.text(0.55, 0.83, "SUS", color="goldenrod", fontweight="bold")
+    if source['flags'] & 12:
+        fig.text(0.60, 0.83, "CENTROID", color="red", fontweight="bold")
+    if source['flags'] & 13:
+        fig.text(0.73, 0.83, "CEN+", color="chocolate", fontweight="bold")
+    if source['flags'] & 14:
+        fig.text(0.80, 0.83, "CEN-", color="blue", fontweight="bold")
+    if source['flags'] & 23 or source['flags'] & 24 or source['flags'] & 25 \
+       or source['flags'] & 26 or source['flags'] & 27:
+        fig.text(0.87, 0.83, "SHAPE", color="red", fontweight="bold")
+
+    # color the forced flux label if any forced flag is set
+    if source['flags'] & 20 or source['flags'] & 21 or source['flags'] & 22:
+        total_color = "red"
+    else:
+        total_color = text_color
+    fig.text(0.0, 0.79, "total (nJy):", color=total_color)
+    fig.text(0.25, 0.79, f"{source['totFlux']:8.1f}", horizontalalignment='right')
+    fig.text(0.252, 0.79, "+/-", color=text_color)
+    fig.text(0.29, 0.79, f"{source['totFluxErr']:8.1f}")
+    fig.text(0.40, 0.79, "S/N:", color=text_color)
+    fig.text(0.45, 0.79, f"{abs(source['totFlux']/source['totFluxErr']):6.2f}")
+    fig.text(0.55, 0.79, "ABmag:", color=text_color)
+    fig.text(0.635, 0.79, f"{(source['totFlux']*u.nanojansky).to_value(u.ABmag):.3f}")
 
 
 def build_argparser():

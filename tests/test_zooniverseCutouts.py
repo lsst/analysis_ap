@@ -111,6 +111,37 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
             self.assertEqual(im.height, 233)
             self.assertEqual(im.width, 630)
 
+    def test_generate_image_metadata(self):
+        """Test that we can add metadata to the image; it changes the height
+        a lot, and the width a little for the text boxes.
+
+        It's useful to have a person look at the output via:
+            im.show()
+        """
+        config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
+        config.addMetadata = True
+        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
+        cutout = cutouts.generate_image(
+            self.science, self.template, self.difference, self.skyCenter, source=DATA.iloc[0]
+        )
+        with PIL.Image.open(cutout) as im:
+            # NOTE: uncomment this to show the resulting image.
+            # im.show()
+            # NOTE: the dimensions here are determined by the matplotlib figure
+            # size (in inches) and the dpi (default=100), plus borders.
+            self.assertEqual((im.height, im.width), (343, 645))
+
+        # A cutout without any flags: the dimensions should be unchanged.
+        cutout = cutouts.generate_image(
+            self.science, self.template, self.difference, self.skyCenter, source=DATA.iloc[1]
+        )
+        with PIL.Image.open(cutout) as im:
+            # NOTE: uncomment this to show the resulting image.
+            # im.show()
+            # NOTE: the dimensions here are determined by the matplotlib figure
+            # size (in inches) and the dpi (default=100), plus borders.
+            self.assertEqual((im.height, im.width), (343, 645))
+
     def test_write_images(self):
         """Test that images get written to a temporary directory."""
         butler = unittest.mock.Mock(spec=lsst.daf.butler.Butler)
