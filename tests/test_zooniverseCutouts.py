@@ -139,7 +139,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
             config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
             cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
 
-            with self.assertLogs("zooniverseCutouts", "ERROR") as cm:
+            with self.assertLogs("lsst.zooniverseCutouts", "ERROR") as cm:
                 cutouts.write_images(data, butler, path)
             self.assertIn(
                 "LookupError processing diaSourceId 5: Dataset not found", cm.output[0]
