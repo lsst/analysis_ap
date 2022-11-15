@@ -19,7 +19,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""Construct template/image/difference cutouts for upload to Zooniverse.
+"""Construct template/image/difference cutouts for upload to Zooniverse, or
+to just to view as images.
 """
 
 __all__ = ["ZooniverseCutoutsConfig", "ZooniverseCutoutsTask"]
