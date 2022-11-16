@@ -46,9 +46,11 @@ class ZooniverseCutoutsConfig(pexConfig.Config):
         default=30,
     )
     urlRoot = pexConfig.Field(
-        doc="URL that the resulting images will be served to Zooniverse from, for the manifest file.",
+        doc="URL that the resulting images will be served to Zooniverse from, for the manifest file. "
+            "If not set, no manifest file will be written.",
         dtype=str,
-        optional=False,
+        default=None,
+        optional=True,
     )
     diffImageType = pexConfig.Field(
         doc="Dataset type of template and difference image to use for cutouts; "
@@ -81,8 +83,13 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             images themselves go into ``outputPath/images/``.
         """
         result = self.write_images(data, butler, outputPath)
-        manifest = self.make_manifest(result)
-        manifest.to_csv(os.path.join(outputPath, "manifest.csv"), index=False)
+
+        if self.config.urlRoot is not None:
+            manifest = self.make_manifest(result)
+            manifest.to_csv(os.path.join(outputPath, "manifest.csv"), index=False)
+        else:
+            self.log.warning("No urlRoot provided, so no manifest file written.")
+
         self.log.info("Wrote %d images to %s", len(result), outputPath)
 
     @staticmethod

@@ -31,6 +31,21 @@ You can find Jira issues for this module under the `analysis_ap <https://jira.ls
 .. .. toctree::
 ..    :maxdepth: 1
 
+.. _lsst.analysis.ap-command-line-taskref:
+
+Task reference
+==============
+
+
+.. _lsst.analysis.ap-tasks:
+
+Tasks
+-----
+
+.. lsst-tasks::
+   :root: lsst.analysis.ap
+   :toctree: tasks
+
 .. _lsst.analysis.ap-scripts:
 
 Script reference

@@ -31,7 +31,6 @@ import lsst.utils.tests
 import pandas as pd
 import PIL
 from lsst.analysis.ap import zooniverseCutouts
-from lsst.pex.config import FieldValidationError
 
 
 class TestZooniverseCutouts(lsst.utils.tests.TestCase):
@@ -140,7 +139,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
             config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
             cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
 
-            with self.assertLogs("zooniverseCutouts", "ERROR") as cm:
+            with self.assertLogs("lsst.zooniverseCutouts", "ERROR") as cm:
                 cutouts.write_images(data, butler, path)
             self.assertIn(
                 "LookupError processing diaSourceId 5: Dataset not found", cm.output[0]
@@ -226,22 +225,6 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
             # reads in a random order every time.
             self.assertEqual(run.call_args.args[2], self._butler.return_value)
             self.assertEqual(run.call_args.args[3], self.outputPath)
-
-    def test_main_args_no_config_fails(self):
-        """Test that not passing a config file fails because urlRoot
-        is None."""
-        args = [
-            "zooniverseCutouts",
-            f"--dbName={self.dbName}",
-            f"--collections={self.collection}",
-            f"--instrument={self.instrument}",
-            self.repo,
-            self.outputPath,
-        ]
-        with unittest.mock.patch.object(sys, "argv", args), self.assertRaisesRegex(
-            FieldValidationError, "Field 'urlRoot' failed validation"
-        ):
-            zooniverseCutouts.main()
 
     def test_main_args_no_collections(self):
         """Test with no collections argument."""
