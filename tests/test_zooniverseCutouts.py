@@ -33,6 +33,26 @@ import PIL
 from lsst.analysis.ap import zooniverseCutouts
 
 
+# A two-row mock APDB DiaSource table.
+DATA = pd.DataFrame(
+    data={
+        "diaSourceId": [5, 10],
+        "ra": [45.001, 45.002],
+        "decl": [45.0, 45.001],
+        "detector": [50, 60],
+        "visit": [1234, 5678],
+        "instrument": ["mockCam", "mockCam"],
+        "filterName": ['mock_r', 'mock_g'],
+        "psFlux": [1234.5, 1234.5],
+        "psFluxErr": [123.5, 123.5],
+        "snr": [10.0, 11.0],
+        "psChi2": [4, 5],
+        "apFlux": [2222.5, 3333.4],
+        "apFluxErr": [222.5, 333.4],
+    }
+)
+
+
 class TestZooniverseCutouts(lsst.utils.tests.TestCase):
     """Test that ZooniverseCutoutsTask generates images and manifest files
     correctly.
@@ -93,16 +113,6 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
 
     def test_write_images(self):
         """Test that images get written to a temporary directory."""
-        data = pd.DataFrame(
-            data={
-                "diaSourceId": [5, 10],
-                "ra": [45.001, 45.002],
-                "decl": [45.0, 45.001],
-                "detector": [50, 60],
-                "visit": [1234, 5678],
-                "instrument": ["mockCam", "mockCam"],
-            }
-        )
         butler = unittest.mock.Mock(spec=lsst.daf.butler.Butler)
         # we don't care what the output images look like here, just that
         # butler.get() returns an Exposure for every call.
@@ -111,8 +121,8 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         with tempfile.TemporaryDirectory() as path:
             config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
             cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
-            result = cutouts.write_images(data, butler, path)
-            self.assertEqual(result, list(data["diaSourceId"]))
+            result = cutouts.write_images(DATA, butler, path)
+            self.assertEqual(result, list(DATA["diaSourceId"]))
             for file in ("images/5.png", "images/10.png"):
                 filename = os.path.join(path, file)
                 self.assertTrue(os.path.exists(filename))
@@ -121,16 +131,6 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
 
     def test_write_images_exception(self):
         """Test that write_images() catches errors in loading data."""
-        data = pd.DataFrame(
-            data={
-                "diaSourceId": [5, 10],
-                "ra": [45.001, 45.002],
-                "decl": [45.0, 45.001],
-                "detector": [50, 60],
-                "visit": [1234, 5678],
-                "instrument": ["mockCam", "mockCam"],
-            }
-        )
         butler = unittest.mock.Mock(spec=lsst.daf.butler.Butler)
         err = "Dataset not found"
         butler.get.side_effect = LookupError(err)
@@ -140,7 +140,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
             cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
 
             with self.assertLogs("lsst.zooniverseCutouts", "ERROR") as cm:
-                cutouts.write_images(data, butler, path)
+                cutouts.write_images(DATA, butler, path)
             self.assertIn(
                 "LookupError processing diaSourceId 5: Dataset not found", cm.output[0]
             )
