@@ -96,8 +96,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
             # im.show()
             # NOTE: the dimensions here are determined by the matplotlib figure
             # size (in inches) and the dpi (default=100), plus borders.
-            self.assertEqual(im.height, 233)
-            self.assertEqual(im.width, 630)
+            self.assertEqual((im.height, im.width), (233, 630))
 
     def test_generate_image_larger_cutout(self):
         """A different cutout size: the resulting cutout image is the same
@@ -114,8 +113,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
             # im.show()
             # NOTE: the dimensions here are determined by the matplotlib figure
             # size (in inches) and the dpi (default=100), plus borders.
-            self.assertEqual(im.height, 233)
-            self.assertEqual(im.width, 630)
+            self.assertEqual((im.height, im.width), (233, 630))
 
     def test_generate_image_metadata(self):
         """Test that we can add metadata to the image; it changes the height
