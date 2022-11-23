@@ -418,17 +418,17 @@ def build_argparser():
         "--dbType",
         default="sqlite",
         choices=["sqlite", "postgres"],
-        help="Type of database to connect to.",
+        help="Type of database to connect to (default='sqlite').",
     )
     apdbArgs.add_argument(
-        "--schema", help="Schema to connect to; only for 'dbName=postgres'."
+        "--schema", help="Schema to connect to; only for 'dbType=postgres'."
     )
 
     parser.add_argument(
         "-n",
-        default=1000,
+        default=5,
         type=int,
-        help="Number of sources to load randomly from the APDB.",
+        help="Number of sources to load randomly from the APDB (default=5).",
     )
 
     parser.add_argument(
