@@ -32,13 +32,15 @@ import pandas as pd
 import PIL
 from lsst.analysis.ap import zooniverseCutouts
 
+# Sky center chosen to test metadata annotations (3-digit RA and negative Dec).
+skyCenter = lsst.geom.SpherePoint(245.0, -45.0, lsst.geom.degrees)
 
 # A two-row mock APDB DiaSource table.
 DATA = pd.DataFrame(
     data={
         "diaSourceId": [506428274000265570, 527736141479149732],
-        "ra": [45.001, 245.002],
-        "decl": [45.0, -45.001],
+        "ra": [skyCenter.getRa().asDegrees()+0.0001, skyCenter.getRa().asDegrees()-0.0001],
+        "decl": [skyCenter.getDec().asDegrees()+0.0001, skyCenter.getDec().asDegrees()-0.001],
         "detector": [50, 60],
         "visit": [1234, 5678],
         "instrument": ["TestMock", "TestMock"],
@@ -66,14 +68,14 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
 
     def setUp(self):
         bbox = lsst.geom.Box2I(lsst.geom.Point2I(0, 0), lsst.geom.Point2I(100, 100))
-        self.centroid = lsst.geom.Point2D(65, 70)
-        dataset = lsst.meas.base.tests.TestDataset(bbox)
+        # source at the center of the image
+        self.centroid = lsst.geom.Point2D(50, 50)
+        dataset = lsst.meas.base.tests.TestDataset(bbox, crval=skyCenter)
         dataset.addSource(instFlux=1e5, centroid=self.centroid)
         self.science, self.scienceCat = dataset.realize(
             noise=1000.0, schema=dataset.makeMinimalSchema()
         )
         lsst.afw.table.updateSourceCoords(self.science.wcs, self.scienceCat)
-        self.skyCenter = self.scienceCat[0].getCoord()
         self.template, self.templateCat = dataset.realize(
             noise=5.0, schema=dataset.makeMinimalSchema()
         )
@@ -89,7 +91,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         """
         cutouts = zooniverseCutouts.ZooniverseCutoutsTask()
         cutout = cutouts.generate_image(
-            self.science, self.template, self.difference, self.skyCenter
+            self.science, self.template, self.difference, skyCenter
         )
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
@@ -106,7 +108,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         config.size = 100
         cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
         cutout = cutouts.generate_image(
-            self.science, self.template, self.difference, self.skyCenter
+            self.science, self.template, self.difference, skyCenter
         )
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
@@ -126,7 +128,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         config.addMetadata = True
         cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
         cutout = cutouts.generate_image(
-            self.science, self.template, self.difference, self.skyCenter, source=DATA.iloc[0]
+            self.science, self.template, self.difference, skyCenter, source=DATA.iloc[0]
         )
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
@@ -137,7 +139,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
 
         # A cutout without any flags: the dimensions should be unchanged.
         cutout = cutouts.generate_image(
-            self.science, self.template, self.difference, self.skyCenter, source=DATA.iloc[1]
+            self.science, self.template, self.difference, skyCenter, source=DATA.iloc[1]
         )
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
@@ -149,7 +151,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
     def test_write_images(self):
         """Test that images get written to a temporary directory."""
         butler = unittest.mock.Mock(spec=lsst.daf.butler.Butler)
-        # we don't care what the output images look like here, just that
+        # We don't care what the output images look like here, just that
         # butler.get() returns an Exposure for every call.
         butler.get.return_value = self.science
 
