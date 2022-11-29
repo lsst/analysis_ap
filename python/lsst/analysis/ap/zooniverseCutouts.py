@@ -35,9 +35,11 @@ import pathlib
 import astropy.units as u
 import pandas as pd
 
+from lsst.ap.association import UnpackApdbFlags
 import lsst.dax.apdb
 import lsst.pex.config as pexConfig
 import lsst.pipe.base
+import lsst.utils
 
 from . import legacyApdbUtils
 
@@ -158,6 +160,9 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             The path to write the output to; manifest goes here, while the
             images themselves go into ``outputPath/images/``.
         """
+        flag_map = os.path.join(lsst.utils.getPackageDir("ap_association"), "data/association-flag-map.yaml")
+        unpacker = UnpackApdbFlags(flag_map, "DiaSource")
+        flags = unpacker.unpack(data["flags"], "flags")
 
         @functools.lru_cache(maxsize=16)
         def get_exposures(instrument, detector, visit):
@@ -180,7 +185,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         pathlib.Path(os.path.join(outputPath, "images")).mkdir(exist_ok=True)
 
         result = []
-        for index, source in data.iterrows():
+        for i, source in enumerate(data.to_records()):
             try:
                 center = lsst.geom.SpherePoint(
                     source["ra"], source["decl"], lsst.geom.degrees
@@ -191,10 +196,10 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
                 image = self.generate_image(science, template, difference, center,
                                             source=source if self.config.addMetadata else None)
                 with open(
-                    self._make_path(source.loc["diaSourceId"], outputPath), "wb"
+                    self._make_path(source["diaSourceId"], outputPath), "wb"
                 ) as outfile:
                     outfile.write(image.getbuffer())
-                result.append(source.loc["diaSourceId"])
+                result.append(source["diaSourceId"])
             except LookupError as e:
                 self.log.error(
                     f"{e.__class__.__name__} processing diaSourceId {source['diaSourceId']}: {e}"
@@ -214,7 +219,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
              Matched science minus template exposure to include in the cutout.
         center : `lsst.geom.SpherePoint`
             Center of the source to be cut out of each image.
-        source : `pandas.Series`, optional
+        source : `numpy.record`, optional
             DiaSource record for this cutout, to add metadata to the image.
 
         Returns
@@ -241,7 +246,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             Cutout template exposure to include in the image.
         difference : `lsst.afw.image.ExposureF`
              Cutout science minus template exposure to include in the image.
-        source : `pandas.Series`, optional
+        source : `numpy.record`, optional
             DiaSource record for this cutout, to add metadata to the image.
 
         Returns
@@ -301,7 +306,7 @@ def _annotate_image(fig, source):
     ----------
     fig : `matplotlib.Figure`
         Figure to be annotated.
-    source : `pandas.DataFrame`
+    source : `numpy.record`
         DiaSource record of the object being plotted.
     """
     text_color = "grey"
