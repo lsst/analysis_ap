@@ -27,6 +27,7 @@ import unittest
 import pandas as pd
 import PIL
 
+from lsst.ap.association import UnpackApdbFlags
 import lsst.afw.table
 import lsst.geom
 import lsst.meas.base.tests
@@ -85,6 +86,10 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         self.difference = lsst.afw.image.ExposureF(self.science, deep=True)
         self.difference.image -= self.template.image
 
+        flag_map = os.path.join(lsst.utils.getPackageDir("ap_association"), "data/association-flag-map.yaml")
+        unpacker = UnpackApdbFlags(flag_map, "DiaSource")
+        self.flags = unpacker.unpack(DATA["flags"], "flags")
+
     def test_generate_image(self):
         """Test that we get some kind of image out.
 
@@ -129,9 +134,12 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
         config.addMetadata = True
         cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
-        cutout = cutouts.generate_image(
-            self.science, self.template, self.difference, skyCenter, source=DATA.iloc[0]
-        )
+        cutout = cutouts.generate_image(self.science,
+                                        self.template,
+                                        self.difference,
+                                        skyCenter,
+                                        source=DATA.iloc[0],
+                                        flags=self.flags[0])
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
             # im.show()
@@ -140,9 +148,12 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
             self.assertEqual((im.height, im.width), (343, 645))
 
         # A cutout without any flags: the dimensions should be unchanged.
-        cutout = cutouts.generate_image(
-            self.science, self.template, self.difference, skyCenter, source=DATA.iloc[1]
-        )
+        cutout = cutouts.generate_image(self.science,
+                                        self.template,
+                                        self.difference,
+                                        skyCenter,
+                                        source=DATA.iloc[1],
+                                        flags=self.flags[1])
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
             # im.show()
