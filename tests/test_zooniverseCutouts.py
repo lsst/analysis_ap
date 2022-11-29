@@ -24,12 +24,14 @@ import sys
 import tempfile
 import unittest
 
+import pandas as pd
+import PIL
+
 import lsst.afw.table
 import lsst.geom
 import lsst.meas.base.tests
 import lsst.utils.tests
-import pandas as pd
-import PIL
+
 from lsst.analysis.ap import zooniverseCutouts
 
 # Sky center chosen to test metadata annotations (3-digit RA and negative Dec).

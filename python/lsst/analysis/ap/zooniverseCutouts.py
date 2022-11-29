@@ -33,11 +33,11 @@ import os
 import pathlib
 
 import astropy.units as u
+import pandas as pd
 
 import lsst.dax.apdb
 import lsst.pex.config as pexConfig
 import lsst.pipe.base
-import pandas as pd
 
 from . import legacyApdbUtils
 
