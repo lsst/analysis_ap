@@ -36,19 +36,25 @@ from lsst.analysis.ap import zooniverseCutouts
 # A two-row mock APDB DiaSource table.
 DATA = pd.DataFrame(
     data={
-        "diaSourceId": [5, 10],
-        "ra": [45.001, 45.002],
-        "decl": [45.0, 45.001],
+        "diaSourceId": [506428274000265570, 527736141479149732],
+        "ra": [45.001, 245.002],
+        "decl": [45.0, -45.001],
         "detector": [50, 60],
         "visit": [1234, 5678],
-        "instrument": ["mockCam", "mockCam"],
-        "filterName": ['mock_r', 'mock_g'],
+        "instrument": ["TestMock", "TestMock"],
+        "filterName": ['r', 'g'],
         "psFlux": [1234.5, 1234.5],
         "psFluxErr": [123.5, 123.5],
         "snr": [10.0, 11.0],
-        "psChi2": [4, 5],
+        "psChi2": [40.0, 50.0],
+        "psNdata": [10, 100],
         "apFlux": [2222.5, 3333.4],
         "apFluxErr": [222.5, 333.4],
+        "totFlux": [2222000.5, 33330000.4],
+        "totFluxErr": [22200.5, 333000.4],
+        "isDipole": [True, False],
+        # all flags vs. no flags
+        "flags": [~0, 0],
     }
 )
 
@@ -154,7 +160,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
             cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
             result = cutouts.write_images(DATA, butler, path)
             self.assertEqual(result, list(DATA["diaSourceId"]))
-            for file in ("images/5.png", "images/10.png"):
+            for file in ("images/506428274000265570.png", "images/527736141479149732.png"):
                 filename = os.path.join(path, file)
                 self.assertTrue(os.path.exists(filename))
                 with PIL.Image.open(filename) as image:
@@ -173,10 +179,10 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
             with self.assertLogs("lsst.zooniverseCutouts", "ERROR") as cm:
                 cutouts.write_images(DATA, butler, path)
             self.assertIn(
-                "LookupError processing diaSourceId 5: Dataset not found", cm.output[0]
+                "LookupError processing diaSourceId 506428274000265570: Dataset not found", cm.output[0]
             )
             self.assertIn(
-                "LookupError processing diaSourceId 10: Dataset not found", cm.output[1]
+                "LookupError processing diaSourceId 527736141479149732: Dataset not found", cm.output[1]
             )
 
     def check_make_manifest(self, url_root, url_list):
