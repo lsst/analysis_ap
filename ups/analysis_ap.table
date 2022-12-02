@@ -13,6 +13,9 @@ setupRequired(utils)
 setupRequired(analysis_tools)
 setupRequired(ap_association)
 
+# TODO: Temporary, to make a test repo, until the CcdVisit is filled out.
+setupOptional(obs_decam)
+
 # The following is boilerplate for all packages.
 # See https://dmtn-001.lsst.io for details on LSST_LIBRARY_PATH.
 envPrepend(PYTHONPATH, ${PRODUCT_DIR}/python)
