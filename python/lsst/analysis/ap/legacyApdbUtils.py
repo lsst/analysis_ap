@@ -195,7 +195,7 @@ def loadTables(repo, dbName='association.db', isVerify=False, dbType='sqlite',
                             'base_PixelFlags_flag_interpolatedCenter',
                             'base_PixelFlags_flag_edge',
                             ],
-               instrument=None, schema=None):
+               instrument=None, schema=None, allCol=False):
     """Load DIA Object and DIA Source tables from an APDB.
 
     Parameters
@@ -218,6 +218,8 @@ def loadTables(repo, dbName='association.db', isVerify=False, dbType='sqlite',
         to the sourceTable, and for all things gen3
     schema : `str`, optional
         Required if dbType is postgres
+    allCol : `bool`, optional
+        If True, load ALL columns of data
 
     Returns
     -------
@@ -243,8 +245,10 @@ def loadTables(repo, dbName='association.db', isVerify=False, dbType='sqlite',
 
     butler = dafButler.Butler(repo)
 
-    objTable = loadAllApdbObjects(dbPath, dbType=dbType, schema=schema)
-    srcTable = loadAllApdbSources(dbPath, dbType=dbType, schema=schema)
+    objTable = loadAllApdbObjects(dbPath, dbType=dbType,
+                                  schema=schema, allCol=allCol)
+    srcTable = loadAllApdbSources(dbPath, dbType=dbType,
+                                  schema=schema, allCol=allCol)
     addTableMetadata(srcTable, butler=butler, instrument=instrument)
     flagTable, srcTableFlags, flagFilter, \
         goodSrc, goodObj = makeSrcTableFlags(srcTable, objTable, badFlagList=badFlagList,
@@ -466,7 +470,7 @@ def loadAllApdbObjects(dbName, dbType='sqlite', schema=None, allCol=False):
     schema : `str`, optional
         Required if dbType is postgres
     allCol : `bool`, optional
-        If True, load ALL columns of data, not just a useful subset
+        If True, load ALL columns of data
 
     Returns
     -------
@@ -504,7 +508,7 @@ def loadAllApdbSources(dbName, dbType='sqlite', schema=None, allCol=False):
     schema : `str`, optional
         Required if dbType is postgres
     allCol : `bool`, optional
-        If True, load ALL columns of data, not just a useful subset
+        If True, load ALL columns of data
 
     Returns
     -------
@@ -530,7 +534,7 @@ def loadAllApdbSources(dbName, dbType='sqlite', schema=None, allCol=False):
 @deprecated(reason="This method is deprecated and will be removed once the "
                    "replacement API is in place.", version="v24", category=FutureWarning)
 def loadAllApdbForcedSources(dbName, dbType='sqlite', schema=None, allCol=False):
-    """Load select columns from all ForcedDiaSources from a APDB
+    """Load columns from all ForcedDiaSources from a APDB
     into a pandas dataframe.
 
     Parameters
@@ -543,12 +547,13 @@ def loadAllApdbForcedSources(dbName, dbType='sqlite', schema=None, allCol=False)
     schema : `str`, optional
         Required if dbType is postgres
     allCol : `bool`, optional
-        If True, load ALL columns of data, not just a useful subset.
+        If True, load ALL columns of data
 
     Returns
     -------
     srcTable : `pandas.DataFrame`
-        DIA Source Table including the columns hard-wired below.
+        DIA Source Table including the columns hard-wired below,
+        or all columns if allCol is set to True.
     """
     connection = connectToApdb(dbName, dbType, schema)
 
