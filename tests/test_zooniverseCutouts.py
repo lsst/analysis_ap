@@ -24,13 +24,44 @@ import sys
 import tempfile
 import unittest
 
+import pandas as pd
+import PIL
+
+from lsst.ap.association import UnpackApdbFlags
 import lsst.afw.table
 import lsst.geom
 import lsst.meas.base.tests
 import lsst.utils.tests
-import pandas as pd
-import PIL
+
 from lsst.analysis.ap import zooniverseCutouts
+
+# Sky center chosen to test metadata annotations (3-digit RA and negative Dec).
+skyCenter = lsst.geom.SpherePoint(245.0, -45.0, lsst.geom.degrees)
+
+# A two-row mock APDB DiaSource table.
+DATA = pd.DataFrame(
+    data={
+        "diaSourceId": [506428274000265570, 527736141479149732],
+        "ra": [skyCenter.getRa().asDegrees()+0.0001, skyCenter.getRa().asDegrees()-0.0001],
+        "decl": [skyCenter.getDec().asDegrees()+0.0001, skyCenter.getDec().asDegrees()-0.001],
+        "detector": [50, 60],
+        "visit": [1234, 5678],
+        "instrument": ["TestMock", "TestMock"],
+        "filterName": ['r', 'g'],
+        "psFlux": [1234.5, 1234.5],
+        "psFluxErr": [123.5, 123.5],
+        "snr": [10.0, 11.0],
+        "psChi2": [40.0, 50.0],
+        "psNdata": [10, 100],
+        "apFlux": [2222.5, 3333.4],
+        "apFluxErr": [222.5, 333.4],
+        "totFlux": [2222000.5, 33330000.4],
+        "totFluxErr": [22200.5, 333000.4],
+        "isDipole": [True, False],
+        # all flags vs. no flags
+        "flags": [~0, 0],
+    }
+)
 
 
 class TestZooniverseCutouts(lsst.utils.tests.TestCase):
@@ -40,20 +71,24 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
 
     def setUp(self):
         bbox = lsst.geom.Box2I(lsst.geom.Point2I(0, 0), lsst.geom.Point2I(100, 100))
-        self.centroid = lsst.geom.Point2D(65, 70)
-        dataset = lsst.meas.base.tests.TestDataset(bbox)
+        # source at the center of the image
+        self.centroid = lsst.geom.Point2D(50, 50)
+        dataset = lsst.meas.base.tests.TestDataset(bbox, crval=skyCenter)
         dataset.addSource(instFlux=1e5, centroid=self.centroid)
         self.science, self.scienceCat = dataset.realize(
             noise=1000.0, schema=dataset.makeMinimalSchema()
         )
         lsst.afw.table.updateSourceCoords(self.science.wcs, self.scienceCat)
-        self.skyCenter = self.scienceCat[0].getCoord()
         self.template, self.templateCat = dataset.realize(
             noise=5.0, schema=dataset.makeMinimalSchema()
         )
         # A simple image difference to have something to plot.
         self.difference = lsst.afw.image.ExposureF(self.science, deep=True)
         self.difference.image -= self.template.image
+
+        flag_map = os.path.join(lsst.utils.getPackageDir("ap_association"), "data/association-flag-map.yaml")
+        unpacker = UnpackApdbFlags(flag_map, "DiaSource")
+        self.flags = unpacker.unpack(DATA["flags"], "flags")
 
     def test_generate_image(self):
         """Test that we get some kind of image out.
@@ -63,15 +98,14 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         """
         cutouts = zooniverseCutouts.ZooniverseCutoutsTask()
         cutout = cutouts.generate_image(
-            self.science, self.template, self.difference, self.skyCenter
+            self.science, self.template, self.difference, skyCenter
         )
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
             # im.show()
             # NOTE: the dimensions here are determined by the matplotlib figure
             # size (in inches) and the dpi (default=100), plus borders.
-            self.assertEqual(im.height, 233)
-            self.assertEqual(im.width, 630)
+            self.assertEqual((im.height, im.width), (233, 630))
 
     def test_generate_image_larger_cutout(self):
         """A different cutout size: the resulting cutout image is the same
@@ -81,39 +115,65 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         config.size = 100
         cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
         cutout = cutouts.generate_image(
-            self.science, self.template, self.difference, self.skyCenter
+            self.science, self.template, self.difference, skyCenter
         )
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
             # im.show()
             # NOTE: the dimensions here are determined by the matplotlib figure
             # size (in inches) and the dpi (default=100), plus borders.
-            self.assertEqual(im.height, 233)
-            self.assertEqual(im.width, 630)
+            self.assertEqual((im.height, im.width), (233, 630))
+
+    def test_generate_image_metadata(self):
+        """Test that we can add metadata to the image; it changes the height
+        a lot, and the width a little for the text boxes.
+
+        It's useful to have a person look at the output via:
+            im.show()
+        """
+        config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
+        config.addMetadata = True
+        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
+        cutout = cutouts.generate_image(self.science,
+                                        self.template,
+                                        self.difference,
+                                        skyCenter,
+                                        source=DATA.iloc[0],
+                                        flags=self.flags[0])
+        with PIL.Image.open(cutout) as im:
+            # NOTE: uncomment this to show the resulting image.
+            # im.show()
+            # NOTE: the dimensions here are determined by the matplotlib figure
+            # size (in inches) and the dpi (default=100), plus borders.
+            self.assertEqual((im.height, im.width), (343, 645))
+
+        # A cutout without any flags: the dimensions should be unchanged.
+        cutout = cutouts.generate_image(self.science,
+                                        self.template,
+                                        self.difference,
+                                        skyCenter,
+                                        source=DATA.iloc[1],
+                                        flags=self.flags[1])
+        with PIL.Image.open(cutout) as im:
+            # NOTE: uncomment this to show the resulting image.
+            # im.show()
+            # NOTE: the dimensions here are determined by the matplotlib figure
+            # size (in inches) and the dpi (default=100), plus borders.
+            self.assertEqual((im.height, im.width), (343, 645))
 
     def test_write_images(self):
         """Test that images get written to a temporary directory."""
-        data = pd.DataFrame(
-            data={
-                "diaSourceId": [5, 10],
-                "ra": [45.001, 45.002],
-                "decl": [45.0, 45.001],
-                "detector": [50, 60],
-                "visit": [1234, 5678],
-                "instrument": ["mockCam", "mockCam"],
-            }
-        )
         butler = unittest.mock.Mock(spec=lsst.daf.butler.Butler)
-        # we don't care what the output images look like here, just that
+        # We don't care what the output images look like here, just that
         # butler.get() returns an Exposure for every call.
         butler.get.return_value = self.science
 
         with tempfile.TemporaryDirectory() as path:
             config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
             cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
-            result = cutouts.write_images(data, butler, path)
-            self.assertEqual(result, list(data["diaSourceId"]))
-            for file in ("images/5.png", "images/10.png"):
+            result = cutouts.write_images(DATA, butler, path)
+            self.assertEqual(result, list(DATA["diaSourceId"]))
+            for file in ("images/506428274000265570.png", "images/527736141479149732.png"):
                 filename = os.path.join(path, file)
                 self.assertTrue(os.path.exists(filename))
                 with PIL.Image.open(filename) as image:
@@ -121,16 +181,6 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
 
     def test_write_images_exception(self):
         """Test that write_images() catches errors in loading data."""
-        data = pd.DataFrame(
-            data={
-                "diaSourceId": [5, 10],
-                "ra": [45.001, 45.002],
-                "decl": [45.0, 45.001],
-                "detector": [50, 60],
-                "visit": [1234, 5678],
-                "instrument": ["mockCam", "mockCam"],
-            }
-        )
         butler = unittest.mock.Mock(spec=lsst.daf.butler.Butler)
         err = "Dataset not found"
         butler.get.side_effect = LookupError(err)
@@ -140,12 +190,12 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
             cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
 
             with self.assertLogs("lsst.zooniverseCutouts", "ERROR") as cm:
-                cutouts.write_images(data, butler, path)
+                cutouts.write_images(DATA, butler, path)
             self.assertIn(
-                "LookupError processing diaSourceId 5: Dataset not found", cm.output[0]
+                "LookupError processing diaSourceId 506428274000265570: Dataset not found", cm.output[0]
             )
             self.assertIn(
-                "LookupError processing diaSourceId 10: Dataset not found", cm.output[1]
+                "LookupError processing diaSourceId 527736141479149732: Dataset not found", cm.output[1]
             )
 
     def check_make_manifest(self, url_root, url_list):

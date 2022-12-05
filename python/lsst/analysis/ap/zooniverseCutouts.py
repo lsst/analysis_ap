@@ -19,7 +19,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""Construct template/image/difference cutouts for upload to Zooniverse.
+"""Construct template/image/difference cutouts for upload to Zooniverse, or
+to just to view as images.
 """
 
 __all__ = ["ZooniverseCutoutsConfig", "ZooniverseCutoutsTask"]
@@ -31,10 +32,14 @@ import logging
 import os
 import pathlib
 
+import astropy.units as u
+import pandas as pd
+
+from lsst.ap.association import UnpackApdbFlags
 import lsst.dax.apdb
 import lsst.pex.config as pexConfig
 import lsst.pipe.base
-import pandas as pd
+import lsst.utils
 
 from . import legacyApdbUtils
 
@@ -57,6 +62,11 @@ class ZooniverseCutoutsConfig(pexConfig.Config):
             "Will have '_templateExp' and '_differenceExp' appended for butler.get(), respectively.",
         dtype=str,
         default="deepDiff",
+    )
+    addMetadata = pexConfig.Field(
+        doc="Annotate the cutouts with catalog metadata, including coordinates, fluxes, flags, etc.",
+        dtype=bool,
+        default=False
     )
 
 
@@ -150,6 +160,9 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             The path to write the output to; manifest goes here, while the
             images themselves go into ``outputPath/images/``.
         """
+        flag_map = os.path.join(lsst.utils.getPackageDir("ap_association"), "data/association-flag-map.yaml")
+        unpacker = UnpackApdbFlags(flag_map, "DiaSource")
+        flags = unpacker.unpack(data["flags"], "flags")
 
         @functools.lru_cache(maxsize=16)
         def get_exposures(instrument, detector, visit):
@@ -172,7 +185,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         pathlib.Path(os.path.join(outputPath, "images")).mkdir(exist_ok=True)
 
         result = []
-        for index, source in data.iterrows():
+        for i, source in enumerate(data.to_records()):
             try:
                 center = lsst.geom.SpherePoint(
                     source["ra"], source["decl"], lsst.geom.degrees
@@ -180,19 +193,21 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
                 science, template, difference = get_exposures(
                     source["instrument"], source["detector"], source["visit"]
                 )
-                image = self.generate_image(science, template, difference, center)
+                image = self.generate_image(science, template, difference, center,
+                                            source=source if self.config.addMetadata else None,
+                                            flags=flags[i] if self.config.addMetadata else None)
                 with open(
-                    self._make_path(source.loc["diaSourceId"], outputPath), "wb"
+                    self._make_path(source["diaSourceId"], outputPath), "wb"
                 ) as outfile:
                     outfile.write(image.getbuffer())
-                result.append(source.loc["diaSourceId"])
+                result.append(source["diaSourceId"])
             except LookupError as e:
                 self.log.error(
                     f"{e.__class__.__name__} processing diaSourceId {source['diaSourceId']}: {e}"
                 )
         return result
 
-    def generate_image(self, science, template, difference, center):
+    def generate_image(self, science, template, difference, center, source=None, flags=None):
         """Get a 3-part cutout image to save to disk, for a single source.
 
         Parameters
@@ -205,20 +220,29 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
              Matched science minus template exposure to include in the cutout.
         center : `lsst.geom.SpherePoint`
             Center of the source to be cut out of each image.
+        source : `numpy.record`, optional
+            DiaSource record for this cutout, to add metadata to the image.
+        flags : `str`, optional
+            Unpacked bits from the ``flags`` field in ``source``.
+            Required if ``source`` is not None.
 
         Returns
         -------
         image: `io.BytesIO`
             The generated image, to be output to a file or displayed on screen.
         """
+        if (source is None) ^ (flags is None):
+            raise RuntimeError("Must pass both `source` and `flags` together.")
         size = lsst.geom.Extent2I(self.config.size, self.config.size)
         return self._plot_cutout(
             science.getCutout(center, size),
             template.getCutout(center, size),
             difference.getCutout(center, size),
+            source=source,
+            flags=flags
         )
 
-    def _plot_cutout(self, science, template, difference):
+    def _plot_cutout(self, science, template, difference, source=None, flags=None):
         """Plot the cutouts for a source in one image.
 
         Parameters
@@ -229,6 +253,10 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             Cutout template exposure to include in the image.
         difference : `lsst.afw.image.ExposureF`
              Cutout science minus template exposure to include in the image.
+        source : `numpy.record`, optional
+            DiaSource record for this cutout, to add metadata to the image.
+        flags : `str`, optional
+            Unpacked bits from the ``flags`` field in ``source``.
 
         Returns
         -------
@@ -237,6 +265,10 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             `image.write(filename)` or displayed on screen.
         """
         import astropy.visualization as aviz
+        import matplotlib
+        matplotlib.use("AGG")
+        # Force matplotlib defaults
+        matplotlib.rcParams.update(matplotlib.rcParamsDefault)
         import matplotlib.pyplot as plt
         from matplotlib import cm
 
@@ -259,11 +291,13 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             ax.set_title(name)
 
         try:
-            fig, (ax1, ax2, ax3) = plt.subplots(1, 3)
+            fig, (ax1, ax2, ax3) = plt.subplots(1, 3, constrained_layout=True)
             plot_one_image(ax1, template.image.array, "Template")
             plot_one_image(ax2, science.image.array, "Science")
             plot_one_image(ax3, difference.image.array, "Difference")
             plt.tight_layout()
+            if source is not None:
+                _annotate_image(fig, source, flags)
 
             output = io.BytesIO()
             plt.savefig(output, bbox_inches="tight", format="png")
@@ -272,6 +306,105 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             plt.close(fig)
 
         return output
+
+
+def _annotate_image(fig, source, flags):
+    """Annotate the cutouts image with metadata and flags.
+
+    Parameters
+    ----------
+    fig : `matplotlib.Figure`
+        Figure to be annotated.
+    source : `numpy.record`
+        DiaSource record of the object being plotted.
+    flags : `str`, optional
+        Unpacked bits from the ``flags`` field in ``source``.
+    """
+    # Names of flags fields to add a flag label to the image, using any().
+    flags_psf = ["slot_PsfFlux_flag", "slot_PsfFlux_flag_noGoodPixels", "slot_PsfFlux_flag_edge"]
+    flags_aperture = ["slot_ApFlux_flag", "slot_ApFlux_flag_apertureTruncated"]
+    flags_forced = ["ip_diffim_forced_PsfFlux_flag", "ip_diffim_forced_PsfFlux_flag_noGoodPixels",
+                    "ip_diffim_forced_PsfFlux_flag_edge"]
+    flags_edge = ["base_PixelFlags_flag_edge"]
+    flags_interp = ["base_PixelFlags_flag_interpolated", "base_PixelFlags_flag_interpolatedCenter"]
+    flags_saturated = ["base_PixelFlags_flag_saturated", "base_PixelFlags_flag_saturatedCenter"]
+    flags_cr = ["base_PixelFlags_flag_cr", "base_PixelFlags_flag_crCenter"]
+    flags_bad = ["base_PixelFlags_flag_bad"]
+    flags_suspect = ["base_PixelFlags_flag_suspect", "base_PixelFlags_flag_suspectCenter"]
+    flags_centroid = ["slot_Centroid_flag"]
+    flags_centroid_pos = ["slot_Centroid_pos_flag"]
+    flags_centroid_neg = ["slot_Centroid_neg_flag"]
+    flags_shape = ["slot_Shape_flag", "slot_Shape_flag_unweightedBad", "slot_Shape_flag_unweighted",
+                   "slot_Shape_flag_shift", "slot_Shape_flag_maxIter", "slot_Shape_flag_psf"]
+
+    flag_color = "red"
+    text_color = "grey"
+    # NOTE: fig.text coordinates are in fractions of the figure.
+    fig.text(0, 0.95, "diaSourceId:", color=text_color)
+    fig.text(0.145, 0.95, f"{source['diaSourceId']}")
+    fig.text(0.43, 0.95, f"{source['instrument']}", fontweight="bold")
+    fig.text(0.64, 0.95, "detector:", color=text_color)
+    fig.text(0.74, 0.95, f"{source['detector']}")
+    fig.text(0.795, 0.95, "visit:", color=text_color)
+    fig.text(0.85, 0.95, f"{source['visit']}")
+    fig.text(0.95, 0.95, f"{source['filterName']}")
+
+    fig.text(0.0, 0.91, "ra:", color=text_color)
+    fig.text(0.037, 0.91, f"{source['ra']:.8f}")
+    fig.text(0.21, 0.91, "dec:", color=text_color)
+    fig.text(0.265, 0.91, f"{source['decl']:+.8f}")
+    fig.text(0.50, 0.91, "detection S/N:", color=text_color)
+    fig.text(0.66, 0.91, f"{source['snr']:6.1f}")
+    fig.text(0.75, 0.91, "PSF chi2:", color=text_color)
+    fig.text(0.85, 0.91, f"{source['psChi2']/source['psNdata']:6.2f}")
+
+    fig.text(0.0, 0.87, "PSF (nJy):", color=flag_color if any(flags[flags_psf]) else text_color)
+    fig.text(0.25, 0.87, f"{source['psFlux']:8.1f}", horizontalalignment='right')
+    fig.text(0.252, 0.87, "+/-", color=text_color)
+    fig.text(0.29, 0.87, f"{source['psFluxErr']:8.1f}")
+    fig.text(0.40, 0.87, "S/N:", color=text_color)
+    fig.text(0.45, 0.87, f"{abs(source['psFlux']/source['psFluxErr']):6.2f}")
+
+    # NOTE: yellow is hard to read on white; use goldenrod instead.
+    if any(flags[flags_edge]):
+        fig.text(0.55, 0.87, "EDGE", color="goldenrod", fontweight="bold")
+    if any(flags[flags_interp]):
+        fig.text(0.62, 0.87, "INTERP", color="green", fontweight="bold")
+    if any(flags[flags_saturated]):
+        fig.text(0.72, 0.87, "SAT", color="green", fontweight="bold")
+    if any(flags[flags_cr]):
+        fig.text(0.77, 0.87, "CR", color="magenta", fontweight="bold")
+    if any(flags[flags_bad]):
+        fig.text(0.81, 0.87, "BAD", color="red", fontweight="bold")
+    if source['isDipole']:
+        fig.text(0.87, 0.87, "DIPOLE", color="indigo", fontweight="bold")
+
+    fig.text(0.0, 0.83, "ap (nJy):", color=flag_color if any(flags[flags_aperture]) else text_color)
+    fig.text(0.25, 0.83, f"{source['apFlux']:8.1f}", horizontalalignment='right')
+    fig.text(0.252, 0.83, "+/-", color=text_color)
+    fig.text(0.29, 0.83, f"{source['apFluxErr']:8.1f}")
+    fig.text(0.40, 0.83, "S/N:", color=text_color)
+    fig.text(0.45, 0.83, f"{abs(source['apFlux']/source['apFluxErr']):#6.2f}")
+
+    if any(flags[flags_suspect]):
+        fig.text(0.55, 0.83, "SUS", color="goldenrod", fontweight="bold")
+    if any(flags[flags_centroid]):
+        fig.text(0.60, 0.83, "CENTROID", color="red", fontweight="bold")
+    if any(flags[flags_centroid_pos]):
+        fig.text(0.73, 0.83, "CEN+", color="chocolate", fontweight="bold")
+    if any(flags[flags_centroid_neg]):
+        fig.text(0.80, 0.83, "CEN-", color="blue", fontweight="bold")
+    if any(flags[flags_shape]):
+        fig.text(0.87, 0.83, "SHAPE", color="red", fontweight="bold")
+
+    fig.text(0.0, 0.79, "total (nJy):", color=flag_color if any(flags[flags_forced]) else text_color)
+    fig.text(0.25, 0.79, f"{source['totFlux']:8.1f}", horizontalalignment='right')
+    fig.text(0.252, 0.79, "+/-", color=text_color)
+    fig.text(0.29, 0.79, f"{source['totFluxErr']:8.1f}")
+    fig.text(0.40, 0.79, "S/N:", color=text_color)
+    fig.text(0.45, 0.79, f"{abs(source['totFlux']/source['totFluxErr']):6.2f}")
+    fig.text(0.55, 0.79, "ABmag:", color=text_color)
+    fig.text(0.635, 0.79, f"{(source['totFlux']*u.nanojansky).to_value(u.ABmag):.3f}")
 
 
 def build_argparser():
@@ -299,17 +432,17 @@ def build_argparser():
         "--dbType",
         default="sqlite",
         choices=["sqlite", "postgres"],
-        help="Type of database to connect to.",
+        help="Type of database to connect to (default='sqlite').",
     )
     apdbArgs.add_argument(
-        "--schema", help="Schema to connect to; only for 'dbName=postgres'."
+        "--schema", help="Schema to connect to; only for 'dbType=postgres'."
     )
 
     parser.add_argument(
         "-n",
-        default=1000,
+        default=5,
         type=int,
-        help="Number of sources to load randomly from the APDB.",
+        help="Number of sources to load randomly from the APDB (default=5).",
     )
 
     parser.add_argument(
