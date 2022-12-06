@@ -19,3 +19,17 @@ pytest_session.txt
 .cache/
 .pytest_cache
 .coverage
+
+.idea/inspectionProfiles/profiles_settings.xml
+
+.idea/analysis_ap.iml
+
+.idea/misc.xml
+
+.idea/modules.xml
+
+.idea/vcs.xml
+
+.idea/inspectionProfiles/Project_Default.xml
+
+.idea/workspace.xml
