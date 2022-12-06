@@ -148,7 +148,7 @@ def loadSelectApdbSources(dbName, diaObjectId, dbType='sqlite', schema=None):
     srcTable = pd.read_sql_query('select "diaSourceId", "diaObjectId", \
                                   "ra", "decl", "ccdVisitId", "filterName", \
                                   "midPointTai", "apFlux", "psFlux", "apFluxErr", \
-                                  "psFluxErr", "totFlux", "totFluxErr", "x", "y", \
+                                  "psFluxErr", "totFlux", "totFluxErr", "snr", "x", "y", \
                                   "ixxPSF", "iyyPSF", "ixyPSF", "flags" from {0}; \
                                   where "diaObjectId" = {1};'.format('"DiaSource"', diaObjectId), connection)
     return srcTable
@@ -522,7 +522,7 @@ def loadAllApdbSources(dbName, dbType='sqlite', schema=None, allCol=False):
         srcTable = pd.read_sql_query('select "diaSourceId", "diaObjectId", \
                                     "ra", "decl", "ccdVisitId", \
                                     "midPointTai", "apFlux", "psFlux", "apFluxErr", \
-                                    "psFluxErr", "totFlux", "totFluxErr", "x", "y", \
+                                    "psFluxErr", "totFlux", "totFluxErr", "snr", "x", "y", \
                                     "ixxPSF", "iyyPSF", "ixyPSF", "flags", "filterName" from {0}; \
                                     '.format('"DiaSource"'), connection)
     else:
@@ -562,7 +562,7 @@ def loadAllApdbForcedSources(dbName, dbType='sqlite', schema=None, allCol=False)
         forcedSrcTable = pd.read_sql_query('select "diaSourceId", "diaObjectId", \
                                         "ra", "decl", "ccdVisitId", \
                                         "midPointTai", "apFlux", "psFlux", "apFluxErr", \
-                                        "psFluxErr", "totFlux", "totFluxErr", "x", "y", \
+                                        "psFluxErr", "totFlux", "totFluxErr", "snr", "x", "y", \
                                         "ixxPSF", "iyyPSF", "ixyPSF", "flags", "filterName" from {0}; \
                                         '.format('"DiaForcedSource"'), connection)
     else:
@@ -599,7 +599,7 @@ def loadApdbSourcesByVisit(dbName, visit, dbType='sqlite', schema=None):
     srcTable = pd.read_sql_query('select "diaSourceId", "diaObjectId", \
                                   "ra", "decl", "ccdVisitId", \
                                   "midPointTai", "apFlux", "psFlux", "apFluxErr", \
-                                  "psFluxErr", "totFlux", "totFluxErr", "x", "y", \
+                                  "psFluxErr", "totFlux", "totFluxErr", "snr", "x", "y", \
                                   "ixxPSF", "iyyPSF", "ixyPSF", "flags", "filterName" from {0} \
                                    where CAST("ccdVisitId" as text) like {1} ; \
                                   '.format('"DiaSource"', "'"+str(int(visit))+"%'"), connection)
@@ -635,7 +635,7 @@ def loadApdbSourcesByBand(dbName, band, dbType='sqlite', schema=None):
                                   "ra", "decl", "ccdVisitId", \
                                   "midPointTai", "apFlux", "psFlux", \
                                   "apFluxErr", "psFluxErr", "totFlux", \
-                                  "totFluxErr", "x", "y", "ixxPSF", \
+                                  "totFluxErr", "snr", "x", "y", "ixxPSF", \
                                   "iyyPSF", "ixyPSF", "flags", "filterName" \
                                   from {0} where "filterName" = {1} ; \
                                   '.format('"DiaSource"', "'"+band+"'"),
