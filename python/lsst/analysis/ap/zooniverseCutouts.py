@@ -28,6 +28,7 @@ __all__ = ["ZooniverseCutoutsConfig", "ZooniverseCutoutsTask"]
 import argparse
 import functools
 import io
+import itertools
 import logging
 import os
 import pathlib
@@ -67,6 +68,12 @@ class ZooniverseCutoutsConfig(pexConfig.Config):
         doc="Annotate the cutouts with catalog metadata, including coordinates, fluxes, flags, etc.",
         dtype=bool,
         default=False
+    )
+    n_processes = pexConfig.Field(
+        doc="Number of processes to use when making cutout images."
+            " 0 means do not use multiprocessing.",
+        dtype=int,
+        default=0
     )
 
 
@@ -164,6 +171,26 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         unpacker = UnpackApdbFlags(flag_map, "DiaSource")
         flags = unpacker.unpack(data["flags"], "flags")
 
+        # Create a subdirectory for the images.
+        pathlib.Path(os.path.join(outputPath, "images")).mkdir(exist_ok=True)
+
+        result = []
+        if self.config.n_processes > 0:
+            import multiprocessing
+            with multiprocessing.Pool(self.config.n_processes) as pool:
+                result = pool.starmap(self._do_one_source, zip(data.to_records(), flags,
+                                                               itertools.repeat(butler),
+                                                               itertools.repeat(outputPath)))
+        else:
+            for i, source in enumerate(data.to_records()):
+                temp = self._do_one_source(source, flags[i], butler, outputPath)
+                if temp is not None:
+                    result.append(temp)
+        return result
+
+    def _do_one_source(self, source, flags, butler, outputPath):
+        """Make cutouts for one diaSource.
+        """
         @functools.lru_cache(maxsize=16)
         def get_exposures(instrument, detector, visit):
             """Return science, template, difference exposures, and use a small
@@ -181,31 +208,31 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
                     butler.get(f'{self.config.diffImageType}_templateExp', dataId),
                     butler.get(f'{self.config.diffImageType}_differenceExp', dataId))
 
-        # Create a subdirectory for the images.
-        pathlib.Path(os.path.join(outputPath, "images")).mkdir(exist_ok=True)
-
-        result = []
-        for i, source in enumerate(data.to_records()):
-            try:
-                center = lsst.geom.SpherePoint(
-                    source["ra"], source["decl"], lsst.geom.degrees
-                )
-                science, template, difference = get_exposures(
-                    source["instrument"], source["detector"], source["visit"]
-                )
-                image = self.generate_image(science, template, difference, center,
-                                            source=source if self.config.addMetadata else None,
-                                            flags=flags[i] if self.config.addMetadata else None)
-                with open(
-                    self._make_path(source["diaSourceId"], outputPath), "wb"
-                ) as outfile:
-                    outfile.write(image.getbuffer())
-                result.append(source["diaSourceId"])
-            except LookupError as e:
-                self.log.error(
-                    f"{e.__class__.__name__} processing diaSourceId {source['diaSourceId']}: {e}"
-                )
-        return result
+        try:
+            center = lsst.geom.SpherePoint(
+                source["ra"], source["decl"], lsst.geom.degrees
+            )
+            science, template, difference = get_exposures(
+                source["instrument"], source["detector"], source["visit"]
+            )
+            image = self.generate_image(science, template, difference, center,
+                                        source=source if self.config.addMetadata else None,
+                                        flags=flags if self.config.addMetadata else None)
+            with open(
+                self._make_path(source["diaSourceId"], outputPath), "wb"
+            ) as outfile:
+                outfile.write(image.getbuffer())
+            return source["diaSourceId"]
+        except LookupError as e:
+            self.log.error(
+                f"{e.__class__.__name__} processing diaSourceId {source['diaSourceId']}: {e}"
+            )
+            return None
+        except Exception as e:
+            # ensure other exceptions are interpretable when multiprocessing
+            import traceback
+            traceback.print_exc()
+            raise e
 
     def generate_image(self, science, template, difference, center, source=None, flags=None):
         """Get a 3-part cutout image to save to disk, for a single source.

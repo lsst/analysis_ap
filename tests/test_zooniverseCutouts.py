@@ -179,6 +179,28 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
                 with PIL.Image.open(filename) as image:
                     self.assertEqual(image.format, "PNG")
 
+    def test_write_images_multiprocess(self):
+        """Test that images get written when multiprocessing is on."""
+        butler = unittest.mock.Mock(spec=lsst.daf.butler.Butler)
+        # We don't care what the output images look like here, just that
+        # butler.get() returns an Exposure for every call.
+        butler.get.return_value = self.science
+        # Override __reduce__ to allow this mock to be pickleable.
+        state = {"_mock_children": butler._mock_children}
+        butler.__reduce__ = lambda self: (unittest.mock.Mock, (), state)
+
+        with tempfile.TemporaryDirectory() as path:
+            config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
+            config.n_processes = 2
+            cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
+            result = cutouts.write_images(DATA, butler, path)
+            self.assertEqual(result, list(DATA["diaSourceId"]))
+            for file in ("images/506428274000265570.png", "images/527736141479149732.png"):
+                filename = os.path.join(path, file)
+                self.assertTrue(os.path.exists(filename))
+                with PIL.Image.open(filename) as image:
+                    self.assertEqual(image.format, "PNG")
+
     def test_write_images_exception(self):
         """Test that write_images() catches errors in loading data."""
         butler = unittest.mock.Mock(spec=lsst.daf.butler.Butler)
