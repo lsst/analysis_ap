@@ -20,6 +20,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import os
+import pickle
 import sys
 import tempfile
 import unittest
@@ -178,6 +179,29 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
                 with PIL.Image.open(filename) as image:
                     self.assertEqual(image.format, "PNG")
 
+    @unittest.skip("Mock and multiprocess don't mix: https://github.com/python/cpython/issues/100090")
+    def test_write_images_multiprocess(self):
+        """Test that images get written when multiprocessing is on."""
+        butler = unittest.mock.Mock(spec=lsst.daf.butler.Butler)
+        # We don't care what the output images look like here, just that
+        # butler.get() returns an Exposure for every call.
+        butler.get.return_value = self.science
+        # Override __reduce__ to allow this mock to be pickleable.
+        state = {"_mock_children": butler._mock_children}
+        butler.__reduce__ = lambda self: (unittest.mock.Mock, (), state)
+
+        with tempfile.TemporaryDirectory() as path:
+            config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
+            config.n_processes = 2
+            cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
+            result = cutouts.write_images(DATA, butler, path)
+            self.assertEqual(result, list(DATA["diaSourceId"]))
+            for file in ("images/506428274000265570.png", "images/527736141479149732.png"):
+                filename = os.path.join(path, file)
+                self.assertTrue(os.path.exists(filename))
+                with PIL.Image.open(filename) as image:
+                    self.assertEqual(image.format, "PNG")
+
     def test_write_images_exception(self):
         """Test that write_images() catches errors in loading data."""
         butler = unittest.mock.Mock(spec=lsst.daf.butler.Butler)
@@ -225,6 +249,16 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
             f"{root}images/20.png",
         ]
         self.check_make_manifest(root, url_list)
+
+    def test_pickle(self):
+        """Test that the task is pickleable (necessary for multiprocessing).
+        """
+        config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
+        config.size = 63
+        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, outputPath="something")
+        other = pickle.loads(pickle.dumps(cutouts))
+        self.assertEqual(cutouts.config.size, other.config.size)
+        self.assertEqual(cutouts._outputPath, other._outputPath)
 
 
 class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
