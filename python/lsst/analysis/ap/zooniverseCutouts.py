@@ -202,7 +202,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
     def _do_one_source(self, source, flags, butler, outputPath):
         """Make cutouts for one diaSource.
         """
-        @functools.lru_cache(maxsize=16)
+        @functools.lru_cache(maxsize=4)
         def get_exposures(instrument, detector, visit):
             """Return science, template, difference exposures, using a small
             cache so we don't have to re-read files as often.
