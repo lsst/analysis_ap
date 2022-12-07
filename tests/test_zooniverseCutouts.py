@@ -233,7 +233,7 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
 
     def setUp(self):
         datadir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/")
-        self.dbName = os.path.join(datadir, "apdb.sqlite3")
+        self.sqlitefile = os.path.join(datadir, "apdb.sqlite3")
         self.repo = "/not/a/real/butler"
         self.collection = "mockRun"
         self.outputPath = "/an/output/path"
@@ -256,7 +256,7 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
         """Test typical arguments to main()."""
         args = [
             "zooniverseCutouts",
-            f"--dbName={self.dbName}",
+            f"--sqlitefile={self.sqlitefile}",
             f"--collections={self.collection}",
             f"-C={self.configFile}",
             f"--instrument={self.instrument}",
@@ -280,7 +280,7 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
         """Test with no collections argument."""
         args = [
             "zooniverseCutouts",
-            f"--dbName={self.dbName}",
+            f"--sqlitefile={self.sqlitefile}",
             f"-C={self.configFile}",
             f"--instrument={self.instrument}",
             self.repo,
@@ -300,7 +300,7 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
         collections = ["mock1", "mock2", "mock3"]
         args = [
             "zooniverseCutouts",
-            f"--dbName={self.dbName}",
+            f"--sqlitefile={self.sqlitefile}",
             f"--instrument={self.instrument}",
             self.repo,
             self.outputPath,
