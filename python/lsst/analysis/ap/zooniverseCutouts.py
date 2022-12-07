@@ -35,6 +35,7 @@ import os
 import pathlib
 
 import astropy.units as u
+import numpy as np
 import pandas as pd
 
 from lsst.ap.association import UnpackApdbFlags
@@ -174,6 +175,8 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             The path to write the output to; manifest goes here, while the
             images themselves go into ``outputPath/images/``.
         """
+        # Ignore divide-by-zero and log-of-negative-value messages.
+        seterr_dict = np.seterr(divide="ignore", invalid="ignore")
         flag_map = os.path.join(lsst.utils.getPackageDir("ap_association"), "data/association-flag-map.yaml")
         unpacker = UnpackApdbFlags(flag_map, "DiaSource")
         flags = unpacker.unpack(data["flags"], "flags")
@@ -192,6 +195,8 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
                 temp = self._do_one_source(source, flags[i], butler, outputPath)
                 if temp is not None:
                     result.append(temp)
+
+        np.seterr(**seterr_dict)
         return result
 
     def _do_one_source(self, source, flags, butler, outputPath):
