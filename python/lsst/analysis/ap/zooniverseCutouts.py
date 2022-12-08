@@ -477,10 +477,17 @@ def build_argparser():
     )
 
     parser.add_argument(
-        "-n",
+        "--limit",
         default=5,
         type=int,
-        help="Number of sources to load randomly from the APDB (default=5).",
+        help="Number of sources to load from the APDB (default=5), or the "
+             "number of sources to load per 'page' when `--all` is set.",
+    )
+    parser.add_argument(
+        "--all",
+        default=False,
+        action="store_true",
+        help="Process all the sources; --limit then becomes the 'page size' to chunk the DB into.",
     )
 
     parser.add_argument(
@@ -511,8 +518,8 @@ def build_argparser():
     return parser
 
 
-def select_sources(dbName, dbType, schema, butler, instrument, n):
-    """Load an APDB and select n objects randomly from it.
+def select_sources(dbName, dbType, schema, butler, instrument, limit):
+    """Load an APDB and select n objects from it.
 
     Parameters
     ----------
@@ -527,21 +534,30 @@ def select_sources(dbName, dbType, schema, butler, instrument, n):
         A butler instance to use to fill out detector/visit information.
     instrument : `str`
         Instrument that produced these data, to fill out a new column.
-    n : `int`
-        Number of sources to randomly select from the APDB.
+    limit : `int`
+        Number of sources to select from the APDB.
 
     Returns
     -------
     sources : `pandas.DataFrame`
         The loaded DiaSource data.
     """
+    offset = 0
     connection = legacyApdbUtils.connectToApdb(dbName, dbType, schema)
-    sources = pd.read_sql_query(
-        f'select * from "DiaSource" ORDER BY RANDOM() LIMIT {n};', connection)
-    legacyApdbUtils.addTableMetadata(sources,
-                                     butler=butler,
-                                     instrument=instrument)
-    return sources
+    try:
+        while True:
+            sources = pd.read_sql_query(
+                f'select * from "DiaSource" ORDER BY diaSourceId LIMIT {limit} OFFSET {offset};',
+                connection)
+            if len(sources) == 0:
+                break
+            legacyApdbUtils.addTableMetadata(sources,
+                                             butler=butler,
+                                             instrument=instrument)
+            yield sources
+            offset += limit
+    finally:
+        connection.close()
 
 
 def run_cutouts(args):
@@ -558,16 +574,24 @@ def run_cutouts(args):
     )
 
     butler = lsst.daf.butler.Butler(args.repo, collections=args.collections)
-    data = select_sources(
-        args.dbName, args.dbType, args.schema, butler, args.instrument, args.n
-    )
 
     config = ZooniverseCutoutsConfig()
     if args.configFile is not None:
         config.load(os.path.expanduser(args.configFile))
     config.freeze()
     cutouts = ZooniverseCutoutsTask(config=config)
-    cutouts.run(data, butler, args.outputPath)
+
+    count = 0
+    if args.all is None:
+        data = select_sources(
+            args.dbName, args.dbType, args.schema, butler, args.instrument, args.limit
+        )
+        count = cutouts.run(data, butler, args.outputPath)
+    else:
+        for data in select_sources(
+                args.dbName, args.dbType, args.schema, butler, args.instrument, args.limit):
+            count += cutouts.run(data, butler, args.outputPath)
+    print(f"Generated {count} diaSource cutouts to {args.outputPath}.")
 
 
 def main():

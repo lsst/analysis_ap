@@ -341,6 +341,31 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
             self.assertEqual(run.call_args.args[2], self._butler.return_value)
             self.assertEqual(run.call_args.args[3], self.outputPath)
 
+    def test_main_args_limit_offset(self):
+        """Test typical arguments to main()."""
+        args = [
+            "zooniverseCutouts",
+            f"--dbName={self.dbName}",
+            f"--collections={self.collection}",
+            f"-C={self.configFile}",
+            f"--instrument={self.instrument}",
+            "--all",
+            self.repo,
+            self.outputPath,
+        ]
+        with unittest.mock.patch.object(
+            zooniverseCutouts.ZooniverseCutoutsTask, "run", autospec=True
+        ) as run, unittest.mock.patch.object(sys, "argv", args):
+            zooniverseCutouts.main()
+            self.assertEqual(self._butler.call_args.args, (self.repo,))
+            self.assertEqual(
+                self._butler.call_args.kwargs, {"collections": [self.collection]}
+            )
+            # NOTE: can't easily test the `data` arg to run, as select_sources
+            # reads in a random order every time.
+            self.assertEqual(run.call_args.args[2], self._butler.return_value)
+            self.assertEqual(run.call_args.args[3], self.outputPath)
+
 
 class TestMemory(lsst.utils.tests.MemoryTestCase):
     pass
