@@ -99,6 +99,11 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         outputPath : `str`
             The path to write the output to; manifest goes here, while the
             images themselves go into ``outputPath/images/``.
+
+        Returns
+        -------
+        count : `int`
+            Number of cutout images that were generated.
         """
         result = self.write_images(data, butler, outputPath)
 
@@ -109,6 +114,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             self.log.warning("No urlRoot provided, so no manifest file written.")
 
         self.log.info("Wrote %d images to %s", len(result), outputPath)
+        return len(result)
 
     @staticmethod
     def _make_path(id, base_path):
