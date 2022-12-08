@@ -578,7 +578,6 @@ def run_cutouts(args):
     config = ZooniverseCutoutsConfig()
     if args.configFile is not None:
         config.load(os.path.expanduser(args.configFile))
-    config.validate()
     config.freeze()
     cutouts = ZooniverseCutoutsTask(config=config)
     cutouts.run(data, butler, args.outputPath)
