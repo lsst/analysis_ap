@@ -491,10 +491,17 @@ def build_argparser():
     )
 
     parser.add_argument(
-        "-n",
+        "--limit",
         default=5,
         type=int,
-        help="Number of sources to load randomly from the APDB (default=5).",
+        help="Number of sources to load from the APDB (default=5), or the "
+             "number of sources to load per 'page' when `--all` is set.",
+    )
+    parser.add_argument(
+        "--all",
+        default=False,
+        action="store_true",
+        help="Process all the sources; --limit then becomes the 'page size' to chunk the DB into.",
     )
 
     parser.add_argument(
@@ -525,8 +532,8 @@ def build_argparser():
     return parser
 
 
-def select_sources(butler, instrument, n, sqlitefile=None, postgres_url=None, namespace=None):
-    """Load an APDB and select n objects randomly from it.
+def select_sources(butler, instrument, limit, sqlitefile=None, postgres_url=None, namespace=None):
+    """Load an APDB and select n objects from it.
 
     Parameters
     ----------
@@ -534,8 +541,8 @@ def select_sources(butler, instrument, n, sqlitefile=None, postgres_url=None, na
         A butler instance to use to fill out detector/visit information.
     instrument : `str`
         Instrument that produced these data, to fill out a new column.
-    n : `int`
-        Number of sources to randomly select from the APDB.
+    limit : `int`
+        Number of sources to select from the APDB.
 
     Returns
     -------
@@ -550,10 +557,20 @@ def select_sources(butler, instrument, n, sqlitefile=None, postgres_url=None, na
         raise RuntimeError("Cannot handle database connection args: "
                            f"sqlitefile={sqlitefile}, postgres_url={postgres_url}, namespace={namespace}")
 
-    with apdbQuery.connection as connection:
-        sources = pd.read_sql_query(f'select * from "DiaSource" ORDER BY RANDOM() LIMIT {n};', connection)
-    apdbQuery._fill_from_ccdVisitId(sources)
-    return sources
+    offset = 0
+    try:
+        while True:
+            with apdbQuery.connection as connection:
+                sources = pd.read_sql_query(f'select * from "DiaSource" ORDER BY RANDOM() LIMIT {n};', connection)
+
+            if len(sources) == 0:
+                break
+            apdbQuery._fill_from_ccdVisitId(sources)
+
+            yield sources
+            offset += limit
+    finally:
+        connection.close()
 
 
 def run_cutouts(args):
@@ -580,7 +597,24 @@ def run_cutouts(args):
         config.load(os.path.expanduser(args.configFile))
     config.freeze()
     cutouts = ZooniverseCutoutsTask(config=config)
-    cutouts.run(data, butler, args.outputPath)
+
+    count = 0
+    if args.all is None:
+        data = select_sources(
+            args.dbName, args.dbType, args.schema, butler, args.instrument, args.limit,
+            sqlitefile=args.sqlitefile,
+            postgres_url=args.postgres_url,
+            namespace=args.namespace
+        )
+        count = cutouts.run(data, butler, args.outputPath)
+    else:
+        for data in select_sources(
+                args.dbName, args.dbType, args.schema, butler, args.instrument, args.limit,
+                sqlitefile=args.sqlitefile,
+                postgres_url=args.postgres_url,
+                namespace=args.namespace):
+            count += cutouts.run(data, butler, args.outputPath)
+    print(f"Generated {count} diaSource cutouts to {args.outputPath}.")
 
 
 def main():
