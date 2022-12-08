@@ -106,6 +106,11 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         outputPath : `str`
             The path to write the output to; manifest goes here, while the
             images themselves go into ``outputPath/images/``.
+
+        Returns
+        -------
+        source_ids : `list`
+            DiaSourceIds of cutout images that were generated.
         """
         result = self.write_images(data, butler, outputPath)
 
@@ -116,6 +121,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             self.log.warning("No urlRoot provided, so no manifest file written.")
 
         self.log.info("Wrote %d images to %s", len(result), outputPath)
+        return result
 
     @staticmethod
     def _make_path(id, base_path):
@@ -174,6 +180,11 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         outputPath : `str`
             The path to write the output to; manifest goes here, while the
             images themselves go into ``outputPath/images/``.
+
+        Returns
+        -------
+        sources : `list`
+            DiaSourceIds that had cutouts made.
         """
         # Ignore divide-by-zero and log-of-negative-value messages.
         seterr_dict = np.seterr(divide="ignore", invalid="ignore")
@@ -184,20 +195,20 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         # Create a subdirectory for the images.
         pathlib.Path(os.path.join(outputPath, "images")).mkdir(exist_ok=True)
 
-        result = []
+        sources = []
         if self.config.n_processes > 0:
             with multiprocessing.Pool(self.config.n_processes) as pool:
-                result = pool.starmap(self._do_one_source, zip(data.to_records(), flags,
-                                                               itertools.repeat(butler),
-                                                               itertools.repeat(outputPath)))
+                sources = pool.starmap(self._do_one_source, zip(data.to_records(), flags,
+                                                                itertools.repeat(butler),
+                                                                itertools.repeat(outputPath)))
         else:
             for i, source in enumerate(data.to_records()):
                 temp = self._do_one_source(source, flags[i], butler, outputPath)
                 if temp is not None:
-                    result.append(temp)
+                    sources.append(temp)
 
         np.seterr(**seterr_dict)
-        return result
+        return sources
 
     def _do_one_source(self, source, flags, butler, outputPath):
         """Make cutouts for one diaSource.
@@ -598,7 +609,7 @@ def run_cutouts(args):
     config.freeze()
     cutouts = ZooniverseCutoutsTask(config=config)
 
-    count = 0
+    sources = []
     if args.all is None:
         data = select_sources(
             args.dbName, args.dbType, args.schema, butler, args.instrument, args.limit,
@@ -606,15 +617,19 @@ def run_cutouts(args):
             postgres_url=args.postgres_url,
             namespace=args.namespace
         )
-        count = cutouts.run(data, butler, args.outputPath)
+        sources = cutouts.run(sources, butler, args.outputPath)
     else:
-        for data in select_sources(
-                args.dbName, args.dbType, args.schema, butler, args.instrument, args.limit,
-                sqlitefile=args.sqlitefile,
-                postgres_url=args.postgres_url,
-                namespace=args.namespace):
-            count += cutouts.run(data, butler, args.outputPath)
-    print(f"Generated {count} diaSource cutouts to {args.outputPath}.")
+        for data in select_sources(args.dbName,
+                                   args.dbType,
+                                   args.schema,
+                                   butler,
+                                   args.instrument,
+                                   args.limit,
+                                   sqlitefile=args.sqlitefile,
+                                   postgres_url=args.postgres_url,
+                                   namespace=args.namespace):
+            sources.append(cutouts.run(data, butler, args.outputPath))
+    print(f"Generated {len(sources)} diaSource cutouts to {args.outputPath}.")
 
 
 def main():
