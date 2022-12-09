@@ -113,13 +113,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             DiaSourceIds of cutout images that were generated.
         """
         result = self.write_images(data, butler, outputPath)
-
-        if self.config.urlRoot is not None:
-            manifest = self.make_manifest(result)
-            manifest.to_csv(os.path.join(outputPath, "manifest.csv"), index=False)
-        else:
-            self.log.warning("No urlRoot provided, so no manifest file written.")
-
+        self.write_manifest(result)
         self.log.info("Wrote %d images to %s", len(result), outputPath)
         return result
 
@@ -141,7 +135,21 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         """
         return f"{base_path}/images/{id}.png"
 
-    def make_manifest(self, sources):
+    def write_manifest(self, sources, outputPath):
+        """Save a Zooniverse manifest attaching image URLs to source ids.
+
+        Parameters
+        ----------
+        sources : `list` [`int`]
+            The diaSourceIds of the sources that had cutouts succesfully made.
+        """
+        if self.config.urlRoot is not None:
+            manifest = self.make_manifest(sources)
+            manifest.to_csv(os.path.join(outputPath, "manifest.csv"), index=False)
+        else:
+            self.log.warning("No urlRoot provided, so no manifest file written.")
+
+    def _make_manifest(self, sources):
         """Return a Zooniverse manifest attaching image URLs to source ids.
 
         Parameters
@@ -573,8 +581,9 @@ def select_sources(butler, instrument, limit, sqlitefile=None, postgres_url=None
     try:
         while True:
             with apdbQuery.connection as connection:
-                sources = pd.read_sql_query(f'select * from "DiaSource" ORDER BY RANDOM() LIMIT {n};', connection)
-
+                sources = pd.read_sql_query(
+                f'select * from "DiaSource" ORDER BY ccdVisitId, diaSourceId LIMIT {limit} OFFSET {offset};',
+                connection)
             if len(sources) == 0:
                 break
             apdbQuery._fill_from_ccdVisitId(sources)
@@ -625,11 +634,10 @@ def run_cutouts(args):
                                    args.schema,
                                    butler,
                                    args.instrument,
-                                   args.limit,
-                                   sqlitefile=args.sqlitefile,
-                                   postgres_url=args.postgres_url,
-                                   namespace=args.namespace):
-            sources.append(cutouts.run(data, butler, args.outputPath))
+                                   args.limit):
+            sources.extend(cutouts.write_images(data, butler, args.outputPath))
+        cutouts.write_manifest(sources, args.outputPath)
+
     print(f"Generated {len(sources)} diaSource cutouts to {args.outputPath}.")
 
 
