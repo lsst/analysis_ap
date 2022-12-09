@@ -106,13 +106,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             DiaSourceIds of cutout images that were generated.
         """
         result = self.write_images(data, butler, outputPath)
-
-        if self.config.urlRoot is not None:
-            manifest = self.make_manifest(result)
-            manifest.to_csv(os.path.join(outputPath, "manifest.csv"), index=False)
-        else:
-            self.log.warning("No urlRoot provided, so no manifest file written.")
-
+        self.write_manifest(result)
         self.log.info("Wrote %d images to %s", len(result), outputPath)
         return result
 
@@ -134,7 +128,21 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         """
         return f"{base_path}/images/{id}.png"
 
-    def make_manifest(self, sources):
+    def write_manifest(self, sources, outputPath):
+        """Save a Zooniverse manifest attaching image URLs to source ids.
+
+        Parameters
+        ----------
+        sources : `list` [`int`]
+            The diaSourceIds of the sources that had cutouts succesfully made.
+        """
+        if self.config.urlRoot is not None:
+            manifest = self.make_manifest(sources)
+            manifest.to_csv(os.path.join(outputPath, "manifest.csv"), index=False)
+        else:
+            self.log.warning("No urlRoot provided, so no manifest file written.")
+
+    def _make_manifest(self, sources):
         """Return a Zooniverse manifest attaching image URLs to source ids.
 
         Parameters
@@ -552,7 +560,7 @@ def select_sources(dbName, dbType, schema, butler, instrument, limit):
     try:
         while True:
             sources = pd.read_sql_query(
-                f'select * from "DiaSource" ORDER BY diaSourceId LIMIT {limit} OFFSET {offset};',
+                f'select * from "DiaSource" ORDER BY ccdVisitId, diaSourceId LIMIT {limit} OFFSET {offset};',
                 connection)
             if len(sources) == 0:
                 break
@@ -597,6 +605,9 @@ def run_cutouts(args):
                                    butler,
                                    args.instrument,
                                    args.limit):
+            sources.extend(cutouts.write_images(data, butler, args.outputPath))
+        cutouts.write_manifest(sources, args.outputPath)
+
     print(f"Generated {len(sources)} diaSource cutouts to {args.outputPath}.")
 
 

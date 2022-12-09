@@ -226,7 +226,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
         config.urlRoot = url_root
         cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
-        manifest = cutouts.make_manifest(data)
+        manifest = cutouts._make_manifest(data)
         self.assertEqual(manifest["metadata:diaSourceId"].to_list(), [5, 10, 20])
         self.assertEqual(manifest["location:1"].to_list(), url_list)
 
@@ -350,21 +350,27 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
             f"-C={self.configFile}",
             f"--instrument={self.instrument}",
             "--all",
+            "--limit=5",
             self.repo,
             self.outputPath,
         ]
         with unittest.mock.patch.object(
-            zooniverseCutouts.ZooniverseCutoutsTask, "run", autospec=True
-        ) as run, unittest.mock.patch.object(sys, "argv", args):
+            zooniverseCutouts.ZooniverseCutoutsTask, "write_images", autospec=True,
+            return_value=[5]
+        ) as write_images, unittest.mock.patch.object(
+            zooniverseCutouts.ZooniverseCutoutsTask, "write_manifest", autospec=True
+        ) as write_manifest, unittest.mock.patch.object(sys, "argv", args):
             zooniverseCutouts.main()
             self.assertEqual(self._butler.call_args.args, (self.repo,))
             self.assertEqual(
                 self._butler.call_args.kwargs, {"collections": [self.collection]}
             )
-            # NOTE: can't easily test the `data` arg to run, as select_sources
-            # reads in a random order every time.
-            self.assertEqual(run.call_args.args[2], self._butler.return_value)
-            self.assertEqual(run.call_args.args[3], self.outputPath)
+            self.assertEqual(write_images.call_args.args[2], self._butler.return_value)
+            self.assertEqual(write_images.call_args.args[3], self.outputPath)
+            # The test apdb contains 15 sources, so we get the return of
+            # `write_images` three times with `limit=5`
+            self.assertEqual(write_manifest.call_args.args[1], [5, 5, 5])
+            self.assertEqual(write_manifest.call_args.args[2], self.outputPath)
 
 
 class TestMemory(lsst.utils.tests.MemoryTestCase):
