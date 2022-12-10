@@ -23,7 +23,7 @@
 to just to view as images.
 """
 
-__all__ = ["ZooniverseCutoutsConfig", "ZooniverseCutoutsTask"]
+__all__ = ["ZooniverseCutoutsConfig", "ZooniverseCutoutsTask", "PathManager"]
 
 import argparse
 import functools
@@ -77,21 +77,39 @@ class ZooniverseCutoutsConfig(pexConfig.Config):
         dtype=int,
         default=0
     )
+    chunk_size = pexConfig.Field(
+        doc="Chunk up files into subdirectories, with at most this many files per directory."
+            " None (default) means write all the files to one `images/` directory.",
+        dtype=int,
+        default=None,
+        optional=True
+    )
 
 
 class ZooniverseCutoutsTask(lsst.pipe.base.Task):
-    """Generate cutouts and a manifest for upload to a Zooniverse project."""
+    """Generate cutouts and a manifest for upload to a Zooniverse project.
 
+    Parameters
+    ----------
+    outputPath : `str`
+        The path to write the output to; manifest goes here, while the
+        images themselves go into ``outputPath/images/``.
+    """
     ConfigClass = ZooniverseCutoutsConfig
     _DefaultName = "zooniverseCutouts"
 
-    def run(self, data, butler, outputPath):
+    def __init__(self, *, outputPath, **kwargs):
+        super().__init__(**kwargs)
+        self._outputPath = outputPath
+        self.path_manager = PathManager(outputPath, chunk_size=self.config.chunk_size)
 
     def _reduce_kwargs(self):
         # to allow pickling of this Task
         kwargs = super()._reduce_kwargs()
         kwargs["outputPath"] = self._outputPath
         return kwargs
+
+    def run(self, data, butler):
         """Generate cutouts images and a manifest for upload to Zooniverse
         from a collection of sources.
 
@@ -103,39 +121,18 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         butler : `lsst.daf.butler.Butler`
             The butler connection to use to load the data; create it with the
             collections you wish to load images from.
-        outputPath : `str`
-            The path to write the output to; manifest goes here, while the
-            images themselves go into ``outputPath/images/``.
 
         Returns
         -------
         source_ids : `list` [`int`]
             DiaSourceIds of cutout images that were generated.
         """
-        result = self.write_images(data, butler, outputPath)
+        result = self.write_images(data, butler)
         self.write_manifest(result)
-        self.log.info("Wrote %d images to %s", len(result), outputPath)
+        self.log.info("Wrote %d images to %s", len(result), self.path_manager(filename=""))
         return result
 
-    @staticmethod
-    def _make_path(id, base_path):
-        """Return a URL or file path for this source.
-
-        Parameters
-        ----------
-        id : `int`
-            The source id of the source.
-        base_path : `str`
-            Base URL or directory path, with no ending ``/``.
-
-        Returns
-        -------
-        path : `str`
-            Formatted URL or path.
-        """
-        return f"{base_path}/images/{id}.png"
-
-    def write_manifest(self, sources, outputPath):
+    def write_manifest(self, sources):
         """Save a Zooniverse manifest attaching image URLs to source ids.
 
         Parameters
@@ -145,7 +142,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         """
         if self.config.urlRoot is not None:
             manifest = self.make_manifest(sources)
-            manifest.to_csv(os.path.join(outputPath, "manifest.csv"), index=False)
+            manifest.to_csv(self.path_manager(fileame="manifest.csv"), index=False)
         else:
             self.log.warning("No urlRoot provided, so no manifest file written.")
 
@@ -162,19 +159,18 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         manifest : `pandas.DataFrame`
             The formatted URL manifest for upload to Zooniverse.
         """
+        path_manager = PathManager(self.config.urlRoot)
         manifest = pd.DataFrame()
         manifest["external_id"] = sources
-        manifest["location:1"] = [
-            self._make_path(x, self.config.urlRoot.rstrip("/")) for x in sources
-        ]
+        manifest["location:1"] = [path_manager(x) for x in sources]
         manifest["metadata:diaSourceId"] = sources
         return manifest
 
-    def write_images(self, data, butler, outputPath):
+    def write_images(self, data, butler):
         """Make the 3-part cutout images for each requested source and write
         them to disk.
 
-        Creates a ``images/`` subdirectory in ``outputPath`` if one
+        Creates a ``images/`` subdirectory via path_manager if one
         does not already exist; images are written there as PNG files.
 
         Parameters
@@ -185,9 +181,6 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         butler : `lsst.daf.butler.Butler`
             The butler connection to use to load the data; create it with the
             collections you wish to load images from.
-        outputPath : `str`
-            The path to write the output to; manifest goes here, while the
-            images themselves go into ``outputPath/images/``.
 
         Returns
         -------
@@ -201,14 +194,13 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         flags = unpacker.unpack(data["flags"], "flags")
 
         # Create a subdirectory for the images.
-        pathlib.Path(os.path.join(outputPath, "images")).mkdir(exist_ok=True)
+        pathlib.Path(self.path_manager(filename="images")).mkdir(exist_ok=True)
 
         sources = []
         if self.config.n_processes > 0:
             with multiprocessing.Pool(self.config.n_processes) as pool:
                 sources = pool.starmap(self._do_one_source, zip(data.to_records(), flags,
-                                                                itertools.repeat(butler),
-                                                                itertools.repeat(outputPath)))
+                                                                itertools.repeat(butler)))
         else:
             for i, source in enumerate(data.to_records()):
                 id = self._do_one_source(source, flags[i], butler)
@@ -219,7 +211,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         # Only return successful ids, not failures.
         return [s for s in sources if s is not None]
 
-    def _do_one_source(self, source, flags, butler, outputPath):
+    def _do_one_source(self, source, flags, butler):
         """Make cutouts for one diaSource.
         """
         @functools.lru_cache(maxsize=4)
@@ -240,19 +232,16 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
                     butler.get(f'{self.config.diffImageType}_differenceExp', dataId))
 
         try:
-            center = lsst.geom.SpherePoint(
-                source["ra"], source["decl"], lsst.geom.degrees
-            )
-            science, template, difference = get_exposures(
-                source["instrument"], source["detector"], source["visit"]
-            )
+            center = lsst.geom.SpherePoint(source["ra"], source["decl"], lsst.geom.degrees)
+            science, template, difference = get_exposures(source["instrument"],
+                                                          source["detector"],
+                                                          source["visit"])
             scale = science.wcs.getPixelScale().asArcseconds()
             image = self.generate_image(science, template, difference, center, scale,
                                         source=source if self.config.addMetadata else None,
                                         flags=flags if self.config.addMetadata else None)
-            with open(
-                self._make_path(source["diaSourceId"], outputPath), "wb"
-            ) as outfile:
+            self.path_manager.create_path(source["diaSourceId"])
+            with open(self.path_manager(source["diaSourceId"]), "wb") as outfile:
                 outfile.write(image.getbuffer())
             return source["diaSourceId"]
         except LookupError as e:
@@ -476,6 +465,62 @@ def _annotate_image(fig, source, flags):
     fig.text(0.635, 0.79, f"{(source['totFlux']*u.nanojansky).to_value(u.ABmag):.3f}")
 
 
+class PathManager:
+    """Manage paths to local files, chunked directories, and s3 buckets.
+
+    Parameters
+    ----------
+    root : `str`
+        Root file path to manage.
+    chunk_size : `int`, optional
+        How many files per directory?
+    """
+    def __init__(self, root, chunk_size=None):
+        self._root = root
+        if chunk_size is not None and chunk_size % 10 != 0:
+            raise RuntimeError(f"PathManager file chunking must be a multiple of 10, got {chunk_size}.")
+        self._chunk_size = chunk_size
+
+    def __call__(self, id=None, filename=None):
+        """Return the full path to this diaSourceId cutout.
+
+        Parameters
+        ----------
+        id : `int`
+            Description
+        filename : None, optional
+            Description
+
+        Returns
+        -------
+        TYPE
+            Description
+        """
+        def chunker(id, size):
+            return (id // size)*size
+
+        if id is not None:
+            if self._chunk_size is not None:
+                return os.path.join(self._root, f"images/{chunker(id, self._chunk_size)}/{id}.png")
+            else:
+                return os.path.join(self._root, f"images/{id}.png")
+        elif filename is not None:
+            return os.path.join(self._root, filename)
+
+    def create_path(self, id=None, filename=None):
+        """Summary
+
+        Parameters
+        ----------
+        id : None, optional
+            Description
+        filename : None, optional
+            Description
+        """
+        path = os.path.dirname(self(id=id, filename=filename))
+        os.makedirs(path, exist_ok=True)
+
+
 def build_argparser():
     """Construct an argument parser for the ``zooniverseCutouts`` script.
 
@@ -617,7 +662,7 @@ def run_cutouts(args):
     if args.configFile is not None:
         config.load(os.path.expanduser(args.configFile))
     config.freeze()
-    cutouts = ZooniverseCutoutsTask(config=config)
+    cutouts = ZooniverseCutoutsTask(config=config, outputPath=args.outputPath)
 
     sources = []
     if args.all is None:
