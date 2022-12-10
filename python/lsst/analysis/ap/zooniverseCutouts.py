@@ -644,18 +644,14 @@ def run_cutouts(args):
     cutouts = ZooniverseCutoutsTask(config=config, outputPath=args.outputPath)
 
     sources = []
+    getter = select_sources(args.dbName, args.dbType, args.schema, butler, args.instrument, args.limit)
     if not args.all:
-        data = select_sources(args.dbName, args.dbType, args.schema, butler, args.instrument, args.limit)
-        sources = cutouts.run(data, butler, args.outputPath)
+        data = next(getter)
+        sources = cutouts.run(data, butler)
     else:
-        for data in select_sources(args.dbName,
-                                   args.dbType,
-                                   args.schema,
-                                   butler,
-                                   args.instrument,
-                                   args.limit):
-            sources.extend(cutouts.write_images(data, butler, args.outputPath))
-        cutouts.write_manifest(sources, args.outputPath)
+        for data in getter:
+            sources.extend(cutouts.write_images(data, butler))
+        cutouts.write_manifest(sources)
 
     print(f"Generated {len(sources)} diaSource cutouts to {args.outputPath}.")
 
