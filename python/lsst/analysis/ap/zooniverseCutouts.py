@@ -30,6 +30,7 @@ import functools
 import io
 import itertools
 import logging
+import multiprocessing
 import os
 import pathlib
 
@@ -198,7 +199,6 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
 
         sources = []
         if self.config.n_processes > 0:
-            import multiprocessing
             with multiprocessing.Pool(self.config.n_processes) as pool:
                 sources = pool.starmap(self._do_one_source, zip(data.to_records(), flags,
                                                                 itertools.repeat(butler),
