@@ -86,6 +86,12 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
     _DefaultName = "zooniverseCutouts"
 
     def run(self, data, butler, outputPath):
+
+    def _reduce_kwargs(self):
+        # to allow pickling of this Task
+        kwargs = super()._reduce_kwargs()
+        kwargs["outputPath"] = self._outputPath
+        return kwargs
         """Generate cutouts images and a manifest for upload to Zooniverse
         from a collection of sources.
 
