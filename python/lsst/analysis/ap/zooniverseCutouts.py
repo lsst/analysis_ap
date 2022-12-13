@@ -166,7 +166,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
 
         @functools.lru_cache(maxsize=16)
         def get_exposures(instrument, detector, visit):
-            """Return science, template, difference exposures, and use a small
+            """Return science, template, difference exposures, using a small
             cache so we don't have to re-read files as often.
 
             NOTE: Closure because it needs access to the local-scoped butler,
@@ -194,6 +194,8 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
                     source["instrument"], source["detector"], source["visit"]
                 )
                 image = self.generate_image(science, template, difference, center,
+                scale = science.wcs.getPixelScale().asArcseconds()
+                image = self.generate_image(science, template, difference, center, scale,
                                             source=source if self.config.addMetadata else None,
                                             flags=flags[i] if self.config.addMetadata else None)
                 with open(
@@ -207,7 +209,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
                 )
         return result
 
-    def generate_image(self, science, template, difference, center, source=None, flags=None):
+    def generate_image(self, science, template, difference, center, scale, source=None, flags=None):
         """Get a 3-part cutout image to save to disk, for a single source.
 
         Parameters
@@ -220,6 +222,8 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
              Matched science minus template exposure to include in the cutout.
         center : `lsst.geom.SpherePoint`
             Center of the source to be cut out of each image.
+        scale : `float`
+            Pixel scale in arcseconds.
         source : `numpy.record`, optional
             DiaSource record for this cutout, to add metadata to the image.
         flags : `str`, optional
@@ -238,11 +242,12 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             science.getCutout(center, size),
             template.getCutout(center, size),
             difference.getCutout(center, size),
+            scale,
             source=source,
             flags=flags
         )
 
-    def _plot_cutout(self, science, template, difference, source=None, flags=None):
+    def _plot_cutout(self, science, template, difference, scale, source=None, flags=None):
         """Plot the cutouts for a source in one image.
 
         Parameters
@@ -255,6 +260,8 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
              Cutout science minus template exposure to include in the image.
         source : `numpy.record`, optional
             DiaSource record for this cutout, to add metadata to the image.
+        scale : `float`
+            Pixel scale in arcseconds.
         flags : `str`, optional
             Unpacked bits from the ``flags`` field in ``source``.
 
@@ -286,7 +293,12 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
                     interval=aviz.MinMaxInterval(),
                     stretch=aviz.AsinhStretch(a=0.1),
                 )
-            ax.imshow(data, cmap=cm.bone, interpolation="none", norm=norm)
+            ax.imshow(data, cmap=cm.bone, interpolation="none", norm=norm,
+                      extent=(0, self.config.size, 0, self.config.size), origin="lower", aspect="equal")
+            x_line = 1
+            y_line = 1
+            ax.plot((x_line, x_line + 1.0/scale), (y_line, y_line), color="blue", lw=6)
+            ax.plot((x_line, x_line + 1.0/scale), (y_line, y_line), color="yellow", lw=2)
             ax.axis("off")
             ax.set_title(name)
 
