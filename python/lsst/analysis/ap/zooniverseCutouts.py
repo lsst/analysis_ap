@@ -187,20 +187,15 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         result = []
         for i, source in enumerate(data.to_records()):
             try:
-                center = lsst.geom.SpherePoint(
-                    source["ra"], source["decl"], lsst.geom.degrees
-                )
+                center = lsst.geom.SpherePoint(source["ra"], source["decl"], lsst.geom.degrees)
                 science, template, difference = get_exposures(
                     source["instrument"], source["detector"], source["visit"]
                 )
-                image = self.generate_image(science, template, difference, center,
                 scale = science.wcs.getPixelScale().asArcseconds()
                 image = self.generate_image(science, template, difference, center, scale,
                                             source=source if self.config.addMetadata else None,
                                             flags=flags[i] if self.config.addMetadata else None)
-                with open(
-                    self._make_path(source["diaSourceId"], outputPath), "wb"
-                ) as outfile:
+                with open(self._make_path(source["diaSourceId"], outputPath), "wb") as outfile:
                     outfile.write(image.getbuffer())
                 result.append(source["diaSourceId"])
             except LookupError as e:
