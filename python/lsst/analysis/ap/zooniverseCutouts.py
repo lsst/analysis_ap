@@ -41,6 +41,7 @@ import pandas as pd
 from lsst.ap.association import UnpackApdbFlags
 import lsst.dax.apdb
 import lsst.pex.config as pexConfig
+import lsst.pex.exceptions
 import lsst.pipe.base
 import lsst.utils
 
@@ -53,20 +54,20 @@ class ZooniverseCutoutsConfig(pexConfig.Config):
         dtype=int,
         default=30,
     )
-    urlRoot = pexConfig.Field(
+    url_root = pexConfig.Field(
         doc="URL that the resulting images will be served to Zooniverse from, for the manifest file. "
             "If not set, no manifest file will be written.",
         dtype=str,
         default=None,
         optional=True,
     )
-    diffImageType = pexConfig.Field(
+    diff_image_type = pexConfig.Field(
         doc="Dataset type of template and difference image to use for cutouts; "
             "Will have '_templateExp' and '_differenceExp' appended for butler.get(), respectively.",
         dtype=str,
         default="deepDiff",
     )
-    addMetadata = pexConfig.Field(
+    add_metadata = pexConfig.Field(
         doc="Annotate the cutouts with catalog metadata, including coordinates, fluxes, flags, etc.",
         dtype=bool,
         default=False
@@ -140,11 +141,11 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         sources : `list` [`int`]
             The diaSourceIds of the sources that had cutouts succesfully made.
         """
-        if self.config.urlRoot is not None:
+        if self.config.url_root is not None:
             manifest = self.make_manifest(sources)
             manifest.to_csv(self.path_manager(fileame="manifest.csv"), index=False)
         else:
-            self.log.warning("No urlRoot provided, so no manifest file written.")
+            self.log.warning("No url_root provided, so no manifest file written.")
 
     def _make_manifest(self, sources):
         """Return a Zooniverse manifest attaching image URLs to source ids.
@@ -159,7 +160,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         manifest : `pandas.DataFrame`
             The formatted URL manifest for upload to Zooniverse.
         """
-        path_manager = PathManager(self.config.urlRoot)
+        path_manager = PathManager(self.config.url_root)
         manifest = pd.DataFrame()
         manifest["external_id"] = sources
         manifest["location:1"] = [path_manager(x) for x in sources]
@@ -227,15 +228,17 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             """
             dataId = {'instrument': instrument, 'detector': detector, 'visit': visit}
             return (butler.get('calexp', dataId),
-                    butler.get(f'{self.config.diffImageType}_templateExp', dataId),
-                    butler.get(f'{self.config.diffImageType}_differenceExp', dataId))
+                    butler.get(f'{self.config.diff_image_type}_templateExp', dataId),
+                    butler.get(f'{self.config.diff_image_type}_differenceExp', dataId))
 
         try:
             center = lsst.geom.SpherePoint(source["ra"], source["decl"], lsst.geom.degrees)
-            science, template, difference = get_exposures(source["instrument"], source["detector"], source["visit"])
+            science, template, difference = get_exposures(source["instrument"],
+                                                          source["detector"],
+                                                          source["visit"])
             image = self.generate_image(science, template, difference, center,
-                                        source=source if self.config.addMetadata else None,
-                                        flags=flags if self.config.addMetadata else None)
+                                        source=source if self.config.add_metadata else None,
+                                        flags=flags if self.config.add_metadata else None)
             self.path_manager.create_path(source["diaSourceId"])
             with open(self.path_manager(source["diaSourceId"]), "wb") as outfile:
                 outfile.write(image.getbuffer())
@@ -245,8 +248,13 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
                 f"{e.__class__.__name__} processing diaSourceId {source['diaSourceId']}: {e}"
             )
             return None
+        except lsst.pex.exceptions.Exception as e:
+            self.log.error(
+                f"{e.__class__.__name__} processing diaSourceId {source['diaSourceId']}: {e}"
+            )
+            return None
         except Exception as e:
-            # ensure other exceptions are interpretable when multiprocessing
+            # Ensure other exceptions are interpretable when multiprocessing.
             import traceback
             traceback.print_exc()
             raise e
@@ -609,7 +617,8 @@ def select_sources(dbName, dbType, schema, butler, instrument, limit):
     try:
         while True:
             sources = pd.read_sql_query(
-                f'select * from "DiaSource" ORDER BY ccdVisitId, diaSourceId LIMIT {limit} OFFSET {offset};',
+                'select * FROM "DiaSource" ORDER BY "ccdVisitId", '
+                f'"diaSourceId" LIMIT {limit} OFFSET {offset};',
                 connection)
             if len(sources) == 0:
                 break
@@ -620,6 +629,17 @@ def select_sources(dbName, dbType, schema, butler, instrument, limit):
             offset += limit
     finally:
         connection.close()
+
+
+def len_sources(dbName, dbType, schema, butler, instrument):
+    connection = legacyApdbUtils.connectToApdb(dbName, dbType, schema)
+    try:
+        cursor = connection.cursor()
+        cursor.execute('select count(*) FROM "DiaSource";')
+        count = cursor.fetchone()[0]
+    finally:
+        connection.close()
+    return count
 
 
 def run_cutouts(args):
@@ -649,8 +669,17 @@ def run_cutouts(args):
         data = next(getter)
         sources = cutouts.run(data, butler)
     else:
-        for data in getter:
-            sources.extend(cutouts.write_images(data, butler))
+        count = len_sources(args.dbName, args.dbType, args.schema, butler, args.instrument)
+        import psycopg2
+        import sqlalchemy
+        for i, data in enumerate(getter):
+            try:
+                sources.extend(cutouts.write_images(data, butler))
+            except (psycopg2.OperationalError, sqlalchemy.exc.OperationalError):
+                # If there is an exception re-instantiating the butler from
+                # pickle when multiprocessing, just try again (once).
+                sources.extend(cutouts.write_images(data, butler))
+            print(f"Completed {i} batches of {args.limit} size, out of {count} diaSources.")
         cutouts.write_manifest(sources)
 
     print(f"Generated {len(sources)} diaSource cutouts to {args.outputPath}.")
