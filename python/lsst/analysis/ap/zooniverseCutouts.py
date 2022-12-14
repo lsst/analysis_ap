@@ -473,6 +473,11 @@ def _annotate_image(fig, source, flags):
     if any(flags[flags_shape]):
         fig.text(0.87, 0.83, "SHAPE", color="red", fontweight="bold")
 
+    # rb score
+    fig.text(0.73, 0.79, f"RB:{source['spuriousness']:.03f}",
+             color="red" if source['spuriousness'] < 0.5 else "green",
+             fontweight="bold")
+
     fig.text(0.0, 0.79, "total (nJy):", color=flag_color if any(flags[flags_forced]) else text_color)
     fig.text(0.25, 0.79, f"{source['totFlux']:8.1f}", horizontalalignment='right')
     fig.text(0.252, 0.79, "+/-", color=text_color)
