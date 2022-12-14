@@ -1,4 +1,4 @@
-# This file is part of pipe_tasks.
+# This file is part of analysis_ap.
 #
 # Developed for the LSST Data Management System.
 # This product includes software developed by the LSST Project
@@ -41,7 +41,7 @@ import lsst.pex.config as pexConfig
 import lsst.pipe.base
 import lsst.utils
 
-from . import legacyApdbUtils
+from . import apdb
 
 
 class ZooniverseCutoutsConfig(pexConfig.Config):
@@ -422,20 +422,23 @@ def build_argparser():
         epilog="More information is available at https://pipelines.lsst.io.",
     )
 
-    apdbArgs = parser.add_argument_group("apdb connection")
+    apdbArgs = parser.add_mutually_exclusive_group(required=True)
     apdbArgs.add_argument(
-        "--dbName",
-        required=True,
-        help="Full path (sqlite) or name on lsst-pg-devl (postgres) of the APDB to load.",
+        "--sqlitefile",
+        default=None,
+        help="Path to sqlite file to load from; required for sqlite connection.",
     )
     apdbArgs.add_argument(
-        "--dbType",
-        default="sqlite",
-        choices=["sqlite", "postgres"],
-        help="Type of database to connect to (default='sqlite').",
+        "--namespace",
+        default=None,
+        help="Postgres namespace (aka schema) to connect to; "
+             " required for postgres connections."
     )
-    apdbArgs.add_argument(
-        "--schema", help="Schema to connect to; only for 'dbType=postgres'."
+
+    parser.add_argument(
+        "--postgres_url",
+        default="rubin@usdf-prompt-processing-dev.slac.stanford.edu/lsst-devl",
+        help="Postgres connection path, or default (None) to use ApdbPostgresQuery default."
     )
 
     parser.add_argument(
@@ -473,18 +476,11 @@ def build_argparser():
     return parser
 
 
-def select_sources(dbName, dbType, schema, butler, instrument, n):
+def select_sources(butler, instrument, n, sqlitefile=None, postgres_url=None, namespace=None):
     """Load an APDB and select n objects randomly from it.
 
     Parameters
     ----------
-    dbName : `str`
-        If dbType is sqlite, *full path* to the APDB on lsst-dev.
-        If dbType is postgres, name of the APDB on lsst-pg-devel1.
-    dbType : `str`
-        Either 'sqlite' or 'postgres'.
-    schema : `str`
-        Required if dbType is postgres, ignored for sqlite.
     butler : `lsst.daf.butler.Butler`
         A butler instance to use to fill out detector/visit information.
     instrument : `str`
@@ -497,12 +493,17 @@ def select_sources(dbName, dbType, schema, butler, instrument, n):
     sources : `pandas.DataFrame`
         The loaded DiaSource data.
     """
-    connection = legacyApdbUtils.connectToApdb(dbName, dbType, schema)
-    sources = pd.read_sql_query(
-        f'select * from "DiaSource" ORDER BY RANDOM() LIMIT {n};', connection)
-    legacyApdbUtils.addTableMetadata(sources,
-                                     butler=butler,
-                                     instrument=instrument)
+    if sqlitefile is not None:
+        apdbQuery = apdb.ApdbSqliteQuery(sqlitefile, butler=butler, instrument=instrument)
+    elif postgres_url is not None and namespace is not None:
+        apdbQuery = apdb.ApdbPostgresQuery(namespace, postgres_url, butler=butler, instrument=instrument)
+    else:
+        raise RuntimeError("Cannot handle database connection args: "
+                           f"sqlitefile={sqlitefile}, postgres_url={postgres_url}, namespace={namespace}")
+
+    with apdbQuery.connection as connection:
+        sources = pd.read_sql_query(f'select * from "DiaSource" ORDER BY RANDOM() LIMIT {n};', connection)
+    apdbQuery._fill_from_ccdVisitId(sources)
     return sources
 
 
@@ -512,7 +513,7 @@ def run_cutouts(args):
     Parameters
     ----------
     args : `argparse.Namespace`
-        The parsed commandline arguments.
+        Parsed commandline arguments.
     """
     # We have to initialize the logger manually on the commandline.
     logging.basicConfig(
@@ -520,9 +521,10 @@ def run_cutouts(args):
     )
 
     butler = lsst.daf.butler.Butler(args.repo, collections=args.collections)
-    data = select_sources(
-        args.dbName, args.dbType, args.schema, butler, args.instrument, args.n
-    )
+    data = select_sources(butler, args.instrument, args.n,
+                          sqlitefile=args.sqlitefile,
+                          postgres_url=args.postgres_url,
+                          namespace=args.namespace)
 
     config = ZooniverseCutoutsConfig()
     if args.configFile is not None:
