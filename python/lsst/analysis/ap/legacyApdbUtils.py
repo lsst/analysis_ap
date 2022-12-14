@@ -45,8 +45,8 @@ from lsst.ap.association import UnpackApdbFlags, TransformDiaSourceCatalogConfig
 import lsst.daf.butler as dafButler
 
 
-# @deprecated(reason="This method is deprecated and will be removed once the "
-#                    "replacement API is in place.", version="v24", category=FutureWarning)
+@deprecated(reason="This method is deprecated and will be removed once the "
+                   "replacement API is in place.", version="v24", category=FutureWarning)
 def connectToApdb(dbName, dbType='sqlite', schema=None,
                   user="rubin", host="usdf-prompt-processing-dev.slac.stanford.edu"):
     """Connect to an sqlite or postgres APDB.
