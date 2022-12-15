@@ -357,7 +357,7 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
         """Test typical arguments to main()."""
         args = [
             "zooniverseCutouts",
-            f"--dbName={self.dbName}",
+            f"--sqlitefile={self.sqlitefile}",
             f"--collections={self.collection}",
             f"-C={self.configFile}",
             f"--instrument={self.instrument}",

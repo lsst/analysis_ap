@@ -598,15 +598,49 @@ def build_argparser():
     return parser
 
 
-def select_sources(butler, instrument, limit, sqlitefile=None, postgres_url=None, namespace=None):
-    """Load an APDB and select n objects from it.
+def _make_apdbQuery(butler, instrument, sqlitefile=None, postgres_url=None, namespace=None):
+    """Return a query connection to the specified APDB.
 
     Parameters
     ----------
     butler : `lsst.daf.butler.Butler`
-        A butler instance to use to fill out detector/visit information.
-    instrument : `str`
-        Instrument that produced these data, to fill out a new column.
+        Butler to read detector/visit information from.
+    instrument : `lsst.obs.base.Instrument`
+        Instrument associated with this data, to get detector/visit data.
+    sqlitefile : `str`, optional
+        SQLite file to load APDB from; if set, postgres kwargs are ignored.
+    postgres_url : `str`, optional
+        Postgres connection URL to connect to APDB.
+    namespace : `str`, optional
+        Postgres schema to load from; required with postgres_url.
+
+    Returns
+    -------
+    apdb_query : `lsst.analysis.ap.ApdbQuery`
+        Query instance to use to load data from APDB.
+
+    Raises
+    ------
+    RuntimeError
+        Raised if the APDB connection kwargs are invalid in some way.
+    """
+    if sqlitefile is not None:
+        apdb_query = apdb.ApdbSqliteQuery(sqlitefile, butler=butler, instrument=instrument)
+    elif postgres_url is not None and namespace is not None:
+        apdb_query = apdb.ApdbPostgresQuery(namespace, postgres_url, butler=butler, instrument=instrument)
+    else:
+        raise RuntimeError("Cannot handle database connection args: "
+                           f"sqlitefile={sqlitefile}, postgres_url={postgres_url}, namespace={namespace}")
+    return apdb_query
+
+
+def select_sources(apdb_query, limit):
+    """Load an APDB and return n sources from it.
+
+    Parameters
+    ----------
+    apdb_query : `lsst.analysis.ap.ApdbQuery`
+        APDB query interface to load from.
     limit : `int`
         Number of sources to select from the APDB.
 
@@ -615,29 +649,42 @@ def select_sources(butler, instrument, limit, sqlitefile=None, postgres_url=None
     sources : `pandas.DataFrame`
         The loaded DiaSource data.
     """
-    if sqlitefile is not None:
-        apdbQuery = apdb.ApdbSqliteQuery(sqlitefile, butler=butler, instrument=instrument)
-    elif postgres_url is not None and namespace is not None:
-        apdbQuery = apdb.ApdbPostgresQuery(namespace, postgres_url, butler=butler, instrument=instrument)
-    else:
-        raise RuntimeError("Cannot handle database connection args: "
-                           f"sqlitefile={sqlitefile}, postgres_url={postgres_url}, namespace={namespace}")
-
     offset = 0
     try:
         while True:
-            with apdbQuery.connection as connection:
+            with apdb_query.connection as connection:
                 sources = pd.read_sql_query(
-                f'select * from "DiaSource" ORDER BY ccdVisitId, diaSourceId LIMIT {limit} OFFSET {offset};',
-                connection)
+                    'select * FROM "DiaSource" ORDER BY "ccdVisitId", '
+                    f'"diaSourceId" LIMIT {limit} OFFSET {offset};',
+                    connection)
             if len(sources) == 0:
                 break
-            apdbQuery._fill_from_ccdVisitId(sources)
+            apdb_query._fill_from_ccdVisitId(sources)
 
             yield sources
             offset += limit
     finally:
         connection.close()
+
+
+def len_sources(apdb_query):
+    """Return the number of DiaSources in the supplied APDB.
+
+    Parameters
+    ----------
+    apdb_query : `lsst.analysis.ap.ApdbQuery`
+        APDB query interface to load from.
+
+    Returns
+    -------
+    count : `int`
+        Number of diaSources in this APDB.
+    """
+    with apdb_query.connection as connection:
+        cursor = connection.cursor()
+        cursor.execute('select count(*) FROM "DiaSource";')
+        count = cursor.fetchone()[0]
+    return count
 
 
 def run_cutouts(args):
@@ -654,10 +701,12 @@ def run_cutouts(args):
     )
 
     butler = lsst.daf.butler.Butler(args.repo, collections=args.collections)
-    data = select_sources(butler, args.instrument, args.n,
-                          sqlitefile=args.sqlitefile,
-                          postgres_url=args.postgres_url,
-                          namespace=args.namespace)
+    apdb_query = _make_apdbQuery(butler,
+                                 args.instrument,
+                                 sqlitefile=args.sqlitefile,
+                                 postgres_url=args.postgres_url,
+                                 namespace=args.namespace)
+    data = select_sources(apdb_query, args.limit)
 
     config = ZooniverseCutoutsConfig()
     if args.configFile is not None:
@@ -666,23 +715,17 @@ def run_cutouts(args):
     cutouts = ZooniverseCutoutsTask(config=config, outputPath=args.outputPath)
 
     sources = []
-    if args.all is None:
-        data = select_sources(
-            args.dbName, args.dbType, args.schema, butler, args.instrument, args.limit,
-            sqlitefile=args.sqlitefile,
-            postgres_url=args.postgres_url,
-            namespace=args.namespace
-        )
-        sources = cutouts.run(sources, butler, args.outputPath)
+    getter = select_sources(apdb_query, args.limit)
+    # Process just one block of length "limit", or all sources in the database?
+    if not args.all:
+        data = next(getter)
+        sources = cutouts.run(data, butler)
     else:
-        for data in select_sources(args.dbName,
-                                   args.dbType,
-                                   args.schema,
-                                   butler,
-                                   args.instrument,
-                                   args.limit):
-            sources.extend(cutouts.write_images(data, butler, args.outputPath))
-        cutouts.write_manifest(sources, args.outputPath)
+        count = len_sources(apdb_query)
+        for i, data in enumerate(getter):
+            sources.extend(cutouts.write_images(data, butler))
+            print(f"Completed {i} batches of {args.limit} size, out of {count} diaSources.")
+        cutouts.write_manifest(sources)
 
     print(f"Generated {len(sources)} diaSource cutouts to {args.outputPath}.")
 
