@@ -131,7 +131,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
             im.show()
         """
         config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
-        config.addMetadata = True
+        config.add_metadata = True
         # outputPath does nothing here, since we never write the file to disk.
         cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, outputPath="")
         cutout = cutouts.generate_image(self.science,
@@ -227,7 +227,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         """Check that make_manifest returns an appropriate DataFrame."""
         data = [5, 10, 20]
         config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
-        config.urlRoot = url_root
+        config.url_root = url_root
         # outputPath does nothing here
         cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, outputPath="")
         manifest = cutouts._make_manifest(data)

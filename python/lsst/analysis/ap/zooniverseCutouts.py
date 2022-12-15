@@ -54,20 +54,20 @@ class ZooniverseCutoutsConfig(pexConfig.Config):
         dtype=int,
         default=30,
     )
-    urlRoot = pexConfig.Field(
+    url_root = pexConfig.Field(
         doc="URL that the resulting images will be served to Zooniverse from, for the manifest file. "
             "If not set, no manifest file will be written.",
         dtype=str,
         default=None,
         optional=True,
     )
-    diffImageType = pexConfig.Field(
+    diff_image_type = pexConfig.Field(
         doc="Dataset type of template and difference image to use for cutouts; "
             "Will have '_templateExp' and '_differenceExp' appended for butler.get(), respectively.",
         dtype=str,
         default="deepDiff",
     )
-    addMetadata = pexConfig.Field(
+    add_metadata = pexConfig.Field(
         doc="Annotate the cutouts with catalog metadata, including coordinates, fluxes, flags, etc.",
         dtype=bool,
         default=False
@@ -141,11 +141,11 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         sources : `list` [`int`]
             The diaSourceIds of the sources that had cutouts succesfully made.
         """
-        if self.config.urlRoot is not None:
+        if self.config.url_root is not None:
             manifest = self.make_manifest(sources)
             manifest.to_csv(self.path_manager(fileame="manifest.csv"), index=False)
         else:
-            self.log.warning("No urlRoot provided, so no manifest file written.")
+            self.log.warning("No url_root provided, so no manifest file written.")
 
     def _make_manifest(self, sources):
         """Return a Zooniverse manifest attaching image URLs to source ids.
@@ -160,7 +160,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         manifest : `pandas.DataFrame`
             The formatted URL manifest for upload to Zooniverse.
         """
-        path_manager = PathManager(self.config.urlRoot)
+        path_manager = PathManager(self.config.url_root)
         manifest = pd.DataFrame()
         manifest["external_id"] = sources
         manifest["location:1"] = [path_manager(x) for x in sources]
@@ -229,8 +229,8 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             """
             dataId = {'instrument': instrument, 'detector': detector, 'visit': visit}
             return (butler.get('calexp', dataId),
-                    butler.get(f'{self.config.diffImageType}_templateExp', dataId),
-                    butler.get(f'{self.config.diffImageType}_differenceExp', dataId))
+                    butler.get(f'{self.config.diff_image_type}_templateExp', dataId),
+                    butler.get(f'{self.config.diff_image_type}_differenceExp', dataId))
 
         try:
             center = lsst.geom.SpherePoint(source["ra"], source["decl"], lsst.geom.degrees)
@@ -239,8 +239,8 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
                                                           source["visit"])
             scale = science.wcs.getPixelScale().asArcseconds()
             image = self.generate_image(science, template, difference, center, scale,
-                                        source=source if self.config.addMetadata else None,
-                                        flags=flags if self.config.addMetadata else None)
+                                        source=source if self.config.add_metadata else None,
+                                        flags=flags if self.config.add_metadata else None)
             self.path_manager.create_path(source["diaSourceId"])
             with open(self.path_manager(source["diaSourceId"]), "wb") as outfile:
                 outfile.write(image.getbuffer())
