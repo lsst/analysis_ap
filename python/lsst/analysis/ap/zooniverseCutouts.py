@@ -41,6 +41,7 @@ import pandas as pd
 from lsst.ap.association import UnpackApdbFlags
 import lsst.dax.apdb
 import lsst.pex.config as pexConfig
+import lsst.pex.exceptions
 import lsst.pipe.base
 import lsst.utils
 
@@ -244,16 +245,16 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             with open(self.path_manager(source["diaSourceId"]), "wb") as outfile:
                 outfile.write(image.getbuffer())
             return source["diaSourceId"]
-        except LookupError as e:
+        except (LookupError, lsst.pex.exceptions.Exception) as e:
             self.log.error(
                 f"{e.__class__.__name__} processing diaSourceId {source['diaSourceId']}: {e}"
             )
             return None
-        except Exception as e:
-            # ensure other exceptions are interpretable when multiprocessing
+        except Exception:
+            # Ensure other exceptions are interpretable when multiprocessing.
             import traceback
             traceback.print_exc()
-            raise e
+            raise
 
     def generate_image(self, science, template, difference, center, scale, source=None, flags=None):
         """Get a 3-part cutout image to save to disk, for a single source.
