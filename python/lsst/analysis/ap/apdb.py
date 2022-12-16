@@ -160,6 +160,26 @@ class DbQuery(abc.ABC):
         self._fill_from_ccdVisitId(result)
         return result
 
+    def load_source(self, id):
+        """Load one diaSource.
+
+        Parameters
+        ----------
+        id : `int`
+            DiaSourceId to load data for.
+
+        Returns
+        -------
+        data : `pandas.Series`
+            The requested source.
+        """
+        table = self._tables["DiaSource"]
+        query = table.select().where(table.columns["diaSourceId"] == id)
+        with self.connection as connection:
+            result = pd.read_sql_query(query, connection)
+        self._fill_from_ccdVisitId(result)
+        return result.iloc[0]
+
     def load_sources(self, exclude_flagged=False, limit=100000):
         """Load DiaSources.
 
@@ -191,6 +211,26 @@ class DbQuery(abc.ABC):
         self._fill_from_ccdVisitId(result)
         return result
 
+    def load_object(self, id):
+        """Load one diaObject.
+
+        Parameters
+        ----------
+        id : `int`
+            DiaObjectId to load data for.
+
+        Returns
+        -------
+        data : `pandas.Series`
+            The requested object.
+        """
+        table = self._tables["DiaObject"]
+        query = table.select().where(table.columns["validityStart"].isnot(None))
+        query = query.where(table.columns["diaObjectId"] == id)
+        with self.connection as connection:
+            result = pd.read_sql_query(query, connection)
+        return result.iloc[0]
+
     def load_objects(self, limit=100000):
         """Load all DiaObjects.
 
@@ -214,6 +254,26 @@ class DbQuery(abc.ABC):
             result = pd.read_sql_query(query, connection)
 
         return result
+
+    def load_forced_source(self, id):
+        """Load one diaForcedSource.
+
+        Parameters
+        ----------
+        id : `int`
+            DiaForcedSourceId to load data for.
+
+        Returns
+        -------
+        data : `pandas.Series`
+            The requested forced source.
+        """
+        table = self._tables["DiaForcedSource"]
+        query = table.select().where(table.columns["diaForcedSourceId"] == id)
+        with self.connection as connection:
+            result = pd.read_sql_query(query, connection)
+        self._fill_from_ccdVisitId(result)
+        return result.iloc[0]
 
     def load_forced_sources(self, limit=100000):
         """Load all DiaForcedSources.

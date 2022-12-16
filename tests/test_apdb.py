@@ -104,6 +104,24 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
 
         sources = self.apdb.load_forced_sources(limit=2)
         self.assertEqual(len(sources), 2)
+    def test_load_source(self):
+        result = self.apdb.load_source(224948952930189341)
+        # spot check a few fields
+        self.assertEqual(result['diaSourceId'], 224948952930189341)
+        self.assertEqual(result['diaObjectId'], 224948952930189341)
+        self.assertEqual(result['flags'], 41943836)
+
+    def test_load_object(self):
+        result = self.apdb.load_object(224948952930189342)
+        # spot check a few fields
+        self.assertEqual(result['diaObjectId'], 224948952930189342)
+        self.assertFloatsAlmostEqual(result['ra'], 57.8279300010916, rtol=4e-16)
+
+    def test_load_forced_source(self):
+        result = self.apdb.load_forced_source(224948952930189321)
+        # spot check a few fields
+        self.assertEqual(result['diaForcedSourceId'], 224948952930189321)
+        self.assertEqual(result['diaObjectId'], 224948952930189343)
 
     def test_make_flag_exclusion_clause(self):
         # test clause generation with default flag list
