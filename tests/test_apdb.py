@@ -61,6 +61,17 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         # This test APDB has only one source per object.
         self.assertEqual(len(sources), 1)
         self.assertEqual(sources['diaSourceId'][0], 224948952930189335)
+        sources = self.apdb.load_sources(exclude_flagged=True)
+        self.assertEqual(len(sources), 11)
+
+    def load_sources_for_object(self):
+        sources = self.apdb.load_sources_for_object(224948952930189342)
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources['diaSourceId'], 224948952930189342)
+
+        sources = self.apdb.load_sources_for_object(224948952930189342,
+                                                    exclude_flagged=True)
+        self.assertEqual(len(sources), 0)
 
     def test_load_objects(self):
         objects = self.apdb.load_objects()
@@ -84,6 +95,20 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
 
         sources = self.apdb.load_forced_sources(limit=2)
         self.assertEqual(len(sources), 2)
+
+    def test_make_flag_exclusion_clause(self):
+
+        clause = self.apdb._make_flag_exclusion_clause(self.apdb.bad_DiaSource_flags)
+        self.assertEqual(clause, "((flags & 972) = 0)")
+
+    def test_set_bad_DiaSource_flags(self):
+
+        with self.assertRaises(ValueError):
+            self.apdb.set_bad_DiaSource_flags(['not a real flag'])
+
+        self.apdb.set_bad_DiaSource_flags(['base_PixelFlags_flag'])
+        clause = self.apdb._make_flag_exclusion_clause(self.apdb.bad_DiaSource_flags)
+        self.assertEqual(clause, "((flags & 1) = 0)")
 
 
 class TestMemory(lsst.utils.tests.MemoryTestCase):
