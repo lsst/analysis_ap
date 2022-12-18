@@ -23,13 +23,14 @@
 to just to view as images.
 """
 
-__all__ = ["ZooniverseCutoutsConfig", "ZooniverseCutoutsTask", "PathManager"]
+__all__ = ["ZooniverseCutoutsConfig", "ZooniverseCutoutsTask", "CutoutPath"]
 
 import argparse
 import functools
 import io
 import itertools
 import logging
+from math import log10
 import multiprocessing
 import os
 import pathlib
@@ -92,22 +93,22 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
 
     Parameters
     ----------
-    outputPath : `str`
+    output_path : `str`
         The path to write the output to; manifest goes here, while the
-        images themselves go into ``outputPath/images/``.
+        images themselves go into ``output_path/images/``.
     """
     ConfigClass = ZooniverseCutoutsConfig
     _DefaultName = "zooniverseCutouts"
 
-    def __init__(self, *, outputPath, **kwargs):
+    def __init__(self, *, output_path, **kwargs):
         super().__init__(**kwargs)
-        self._outputPath = outputPath
-        self.path_manager = PathManager(outputPath, chunk_size=self.config.chunk_size)
+        self._output_path = output_path
+        self.cutout_path = CutoutPath(output_path, chunk_size=self.config.chunk_size)
 
     def _reduce_kwargs(self):
         # to allow pickling of this Task
         kwargs = super()._reduce_kwargs()
-        kwargs["outputPath"] = self._outputPath
+        kwargs["output_path"] = self._output_path
         return kwargs
 
     def run(self, data, butler):
@@ -130,7 +131,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         """
         result = self.write_images(data, butler)
         self.write_manifest(result)
-        self.log.info("Wrote %d images to %s", len(result), self.path_manager(filename=""))
+        self.log.info("Wrote %d images to %s", len(result), self._output_path)
         return result
 
     def write_manifest(self, sources):
@@ -143,7 +144,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         """
         if self.config.url_root is not None:
             manifest = self.make_manifest(sources)
-            manifest.to_csv(self.path_manager(fileame="manifest.csv"), index=False)
+            manifest.to_csv(os.path.join(self._output_path, "manifest.csv"), index=False)
         else:
             self.log.warning("No url_root provided, so no manifest file written.")
 
@@ -160,10 +161,10 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         manifest : `pandas.DataFrame`
             The formatted URL manifest for upload to Zooniverse.
         """
-        path_manager = PathManager(self.config.url_root)
+        cutout_path = CutoutPath(self.config.url_root)
         manifest = pd.DataFrame()
         manifest["external_id"] = sources
-        manifest["location:1"] = [path_manager(x) for x in sources]
+        manifest["location:1"] = [cutout_path(x) for x in sources]
         manifest["metadata:diaSourceId"] = sources
         return manifest
 
@@ -171,7 +172,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         """Make the 3-part cutout images for each requested source and write
         them to disk.
 
-        Creates a ``images/`` subdirectory via path_manager if one
+        Creates a ``images/`` subdirectory via cutout_path if one
         does not already exist; images are written there as PNG files.
 
         Parameters
@@ -195,7 +196,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         flags = unpacker.unpack(data["flags"], "flags")
 
         # Create a subdirectory for the images.
-        pathlib.Path(self.path_manager(filename="images")).mkdir(exist_ok=True)
+        pathlib.Path(os.path.join(self._output_path, "images")).mkdir(exist_ok=True)
 
         sources = []
         if self.config.n_processes > 0:
@@ -241,8 +242,8 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             image = self.generate_image(science, template, difference, center, scale,
                                         source=source if self.config.add_metadata else None,
                                         flags=flags if self.config.add_metadata else None)
-            self.path_manager.create_path(source["diaSourceId"])
-            with open(self.path_manager(source["diaSourceId"]), "wb") as outfile:
+            self.cutout_path.mkdir(source["diaSourceId"])
+            with open(self.cutout_path(source["diaSourceId"]), "wb") as outfile:
                 outfile.write(image.getbuffer())
             return source["diaSourceId"]
         except (LookupError, lsst.pex.exceptions.Exception) as e:
@@ -466,59 +467,59 @@ def _annotate_image(fig, source, flags):
     fig.text(0.635, 0.79, f"{(source['totFlux']*u.nanojansky).to_value(u.ABmag):.3f}")
 
 
-class PathManager:
-    """Manage paths to local files, chunked directories, and s3 buckets.
+class CutoutPath:
+    """Manage paths to image cutouts with filenames based on diaSourceId.
+
+    Supports local files, and id-chunked directories.
 
     Parameters
     ----------
     root : `str`
         Root file path to manage.
     chunk_size : `int`, optional
-        How many files per directory?
+        At most this many files per directory. Must be a power of 10.
+
+    Raises
+    ------
+    RuntimeError
+        Raised if chunk_size is not a power of 10.
     """
     def __init__(self, root, chunk_size=None):
         self._root = root
-        if chunk_size is not None and chunk_size % 10 != 0:
-            raise RuntimeError(f"PathManager file chunking must be a multiple of 10, got {chunk_size}.")
+        if chunk_size is not None and (log10(chunk_size) != int(log10(chunk_size))):
+            raise RuntimeError(f"CutoutPath file chunk_size must be a power of 10, got {chunk_size}.")
         self._chunk_size = chunk_size
 
-    def __call__(self, id=None, filename=None):
-        """Return the full path to this diaSourceId cutout.
+    def __call__(self, id):
+        """Return the full path to a diaSource cutout.
 
         Parameters
         ----------
         id : `int`
-            Description
-        filename : None, optional
-            Description
+            Source id to create the path for.
 
         Returns
         -------
-        TYPE
-            Description
+        path : `str`
+            Full path to the requested file.
         """
         def chunker(id, size):
             return (id // size)*size
 
-        if id is not None:
-            if self._chunk_size is not None:
-                return os.path.join(self._root, f"images/{chunker(id, self._chunk_size)}/{id}.png")
-            else:
-                return os.path.join(self._root, f"images/{id}.png")
-        elif filename is not None:
-            return os.path.join(self._root, filename)
+        if self._chunk_size is not None:
+            return os.path.join(self._root, f"images/{chunker(id, self._chunk_size)}/{id}.png")
+        else:
+            return os.path.join(self._root, f"images/{id}.png")
 
-    def create_path(self, id=None, filename=None):
-        """Summary
+    def mkdir(self, id):
+        """Make the directory tree to write this cutout id to.
 
         Parameters
         ----------
-        id : None, optional
-            Description
-        filename : None, optional
-            Description
+        id : `int`
+            Source id to create the path for.
         """
-        path = os.path.dirname(self(id=id, filename=filename))
+        path = os.path.dirname(self(id))
         os.makedirs(path, exist_ok=True)
 
 
@@ -712,7 +713,7 @@ def run_cutouts(args):
     if args.configFile is not None:
         config.load(os.path.expanduser(args.configFile))
     config.freeze()
-    cutouts = ZooniverseCutoutsTask(config=config, outputPath=args.outputPath)
+    cutouts = ZooniverseCutoutsTask(config=config, output_path=args.outputPath)
 
     sources = []
     getter = select_sources(apdb_query, args.limit)

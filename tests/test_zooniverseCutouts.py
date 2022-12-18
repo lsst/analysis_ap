@@ -97,8 +97,8 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         It's useful to have a person look at the output via:
             im.show()
         """
-        # outputPath does nothing here, since we never write the file to disk.
-        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(outputPath="")
+        # output_path does nothing here, since we never write the file to disk.
+        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(output_path="")
         cutout = cutouts.generate_image(self.science, self.template, self.difference, skyCenter, self.scale)
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
@@ -113,8 +113,8 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         """
         config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
         config.size = 100
-        # outputPath does nothing here, since we never write the file to disk.
-        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, outputPath="")
+        # output_path does nothing here, since we never write the file to disk.
+        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path="")
         cutout = cutouts.generate_image(self.science, self.template, self.difference, skyCenter, self.scale)
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
@@ -132,8 +132,8 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         """
         config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
         config.add_metadata = True
-        # outputPath does nothing here, since we never write the file to disk.
-        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, outputPath="")
+        # output_path does nothing here, since we never write the file to disk.
+        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path="")
         cutout = cutouts.generate_image(self.science,
                                         self.template,
                                         self.difference,
@@ -195,7 +195,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         with tempfile.TemporaryDirectory() as path:
             config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
             config.n_processes = 2
-            cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, outputPath=path)
+            cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path=path)
             result = cutouts.write_images(DATA, butler)
             self.assertEqual(result, list(DATA["diaSourceId"]))
             for file in ("images/506428274000265570.png", "images/527736141479149732.png"):
@@ -212,7 +212,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
 
         with tempfile.TemporaryDirectory() as path:
             config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
-            cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, outputPath=path)
+            cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path=path)
 
             with self.assertLogs("lsst.zooniverseCutouts", "ERROR") as cm:
                 cutouts.write_images(DATA, butler)
@@ -228,8 +228,8 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         data = [5, 10, 20]
         config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
         config.url_root = url_root
-        # outputPath does nothing here
-        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, outputPath="")
+        # output_path does nothing here
+        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path="")
         manifest = cutouts._make_manifest(data)
         self.assertEqual(manifest["metadata:diaSourceId"].to_list(), [5, 10, 20])
         self.assertEqual(manifest["location:1"].to_list(), url_list)
@@ -258,10 +258,10 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         """
         config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
         config.size = 63
-        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, outputPath="something")
+        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path="something")
         other = pickle.loads(pickle.dumps(cutouts))
         self.assertEqual(cutouts.config.size, other.config.size)
-        self.assertEqual(cutouts._outputPath, other._outputPath)
+        self.assertEqual(cutouts._output_path, other._output_path)
 
 
 class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
@@ -384,28 +384,34 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
             self.assertEqual(write_manifest.call_args.args[1], [5, 5, 5])
 
 
-class TestPathManager(lsst.utils.tests.TestCase):
+class TestCutoutPath(lsst.utils.tests.TestCase):
     def test_normal_path(self):
         """Can the path manager handles non-chunked paths?
         """
-        manager = zooniverseCutouts.PathManager("some/root/path")
-        path = manager(filename="somefile.txt")
-        self.assertEqual(path, "some/root/path/somefile.txt")
-        path = manager(12345678)
+        manager = zooniverseCutouts.CutoutPath("some/root/path")
+        path = manager(id=12345678)
         self.assertEqual(path, "some/root/path/images/12345678.png")
 
     def test_chunking(self):
         """Can the path manager handle ids chunked into 10,000 file
         directories?
         """
-        with self.assertRaisesRegex(RuntimeError, "chunking must be a multiple of 10"):
-            zooniverseCutouts.PathManager("some/root/path", chunk_size=123)
-
-        manager = zooniverseCutouts.PathManager("some/root/path", chunk_size=10000)
-        path = manager(filename="somefile.txt")
-        self.assertEqual(path, "some/root/path/somefile.txt")
-        path = manager(12345678)
+        manager = zooniverseCutouts.CutoutPath("some/root/path", chunk_size=10000)
+        path = manager(id=12345678)
         self.assertEqual(path, "some/root/path/images/12340000/12345678.png")
+
+    def test_chunk_sizes(self):
+        """Test valid and invalid values for the chunk_size parameter.
+        """
+        with self.assertRaisesRegex(RuntimeError, "chunk_size must be a power of 10"):
+            zooniverseCutouts.CutoutPath("some/root/path", chunk_size=123)
+
+        with self.assertRaisesRegex(RuntimeError, "chunk_size must be a power of 10"):
+            zooniverseCutouts.CutoutPath("some/root/path", chunk_size=12300)
+
+        # should not raise
+        zooniverseCutouts.CutoutPath("some/root/path", chunk_size=1000)
+        zooniverseCutouts.CutoutPath("some/root/path", chunk_size=1000000)
 
 
 class TestMemory(lsst.utils.tests.MemoryTestCase):
