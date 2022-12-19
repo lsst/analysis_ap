@@ -163,6 +163,25 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
             # size (in inches) and the dpi (default=100), plus borders.
             self.assertEqual((im.height, im.width), (343, 645))
 
+    def test_generate_image_invalid_paramters(self):
+        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(output_path="")
+        with self.assertRaisesRegex(RuntimeError, "Must pass both"):
+            cutouts.generate_image(self.science,
+                                   self.template,
+                                   self.difference,
+                                   skyCenter,
+                                   self.scale,
+                                   source=DATA.iloc[1],
+                                   flags=None)
+        with self.assertRaisesRegex(RuntimeError, "Must pass both"):
+            cutouts.generate_image(self.science,
+                                   self.template,
+                                   self.difference,
+                                   skyCenter,
+                                   self.scale,
+                                   source=None,
+                                   flags=self.flags[1])
+
     def test_write_images(self):
         """Test that images get written to a temporary directory."""
         butler = unittest.mock.Mock(spec=lsst.daf.butler.Butler)
