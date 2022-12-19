@@ -61,9 +61,6 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         self.assertEqual(len(sources), 1)
         self.assertEqual(sources['diaSourceId'], 224948952930189335)
 
-        sources = self.apdb.load_sources(limit=2)
-        self.assertEqual(len(sources), 2)
-
     def test_load_objects(self):
         objects = self.apdb.load_objects()
         self.assertEqual(len(objects), 15)
