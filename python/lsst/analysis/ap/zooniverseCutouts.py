@@ -143,7 +143,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             manifest = self.make_manifest(sources)
             manifest.to_csv(os.path.join(self._output_path, "manifest.csv"), index=False)
         else:
-            self.log.warning("No url_root provided, so no manifest file written.")
+            self.log.info("No url_root config provided, so no Zooniverse manifest file was written.")
 
     def _make_manifest(self, sources):
         """Return a Zooniverse manifest attaching image URLs to source ids.
