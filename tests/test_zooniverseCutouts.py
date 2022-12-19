@@ -172,29 +172,6 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
 
         with tempfile.TemporaryDirectory() as path:
             config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
-            cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, outputPath=path)
-            result = cutouts.write_images(DATA, butler)
-            self.assertEqual(result, list(DATA["diaSourceId"]))
-            for file in ("images/506428274000265570.png", "images/527736141479149732.png"):
-                filename = os.path.join(path, file)
-                self.assertTrue(os.path.exists(filename))
-                with PIL.Image.open(filename) as image:
-                    self.assertEqual(image.format, "PNG")
-
-    @unittest.skip("Mock and multiprocess don't mix: https://github.com/python/cpython/issues/100090")
-    def test_write_images_multiprocess(self):
-        """Test that images get written when multiprocessing is on."""
-        butler = unittest.mock.Mock(spec=lsst.daf.butler.Butler)
-        # We don't care what the output images look like here, just that
-        # butler.get() returns an Exposure for every call.
-        butler.get.return_value = self.science
-        # Override __reduce__ to allow this mock to be pickleable.
-        state = {"_mock_children": butler._mock_children}
-        butler.__reduce__ = lambda self: (unittest.mock.Mock, (), state)
-
-        with tempfile.TemporaryDirectory() as path:
-            config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
-            config.n_processes = 2
             cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path=path)
             result = cutouts.write_images(DATA, butler)
             self.assertEqual(result, list(DATA["diaSourceId"]))
@@ -382,6 +359,30 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
             # The test apdb contains 15 sources, so we get the return of
             # `write_images` three times with `limit=5`
             self.assertEqual(write_manifest.call_args.args[1], [5, 5, 5])
+
+    @unittest.skip("Mock and multiprocess don't mix: https://github.com/python/cpython/issues/100090")
+    def test_main_args_multiprocessing(self):
+        """Test running with multiprocessing.
+        """
+        args = [
+            "zooniverseCutouts",
+            f"--sqlitefile={self.sqlitefile}",
+            f"--collections={self.collection}",
+            "-j2",
+            f"-C={self.configFile}",
+            f"--instrument={self.instrument}",
+            self.repo,
+            self.outputPath,
+        ]
+        with unittest.mock.patch.object(
+            zooniverseCutouts.ZooniverseCutoutsTask, "run", autospec=True
+        ) as run, unittest.mock.patch.object(sys, "argv", args):
+            zooniverseCutouts.main()
+            self.assertEqual(self._butler.call_args.args, (self.repo,))
+            self.assertEqual(self._butler.call_args.kwargs, {"collections": [self.collection]})
+            # NOTE: can't easily test the `data` arg to run, as select_sources
+            # reads in a random order every time.
+            self.assertEqual(run.call_args.args[2], self._butler.return_value)
 
 
 class TestCutoutPath(lsst.utils.tests.TestCase):

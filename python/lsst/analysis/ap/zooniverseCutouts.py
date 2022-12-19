@@ -73,12 +73,6 @@ class ZooniverseCutoutsConfig(pexConfig.Config):
         dtype=bool,
         default=False
     )
-    n_processes = pexConfig.Field(
-        doc="Number of processes to use when making cutout images."
-            " 0 means do not use multiprocessing.",
-        dtype=int,
-        default=0
-    )
     chunk_size = pexConfig.Field(
         doc="Chunk up files into subdirectories, with at most this many files per directory."
             " None (default) means write all the files to one `images/` directory.",
@@ -111,7 +105,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         kwargs["output_path"] = self._output_path
         return kwargs
 
-    def run(self, data, butler):
+    def run(self, data, butler, njobs=0):
         """Generate cutouts images and a manifest for upload to Zooniverse
         from a collection of sources.
 
@@ -123,13 +117,16 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         butler : `lsst.daf.butler.Butler`
             The butler connection to use to load the data; create it with the
             collections you wish to load images from.
+        njobs : `int`, optional
+            Number of multiprocessing jobs to make cutouts with; default of 0
+            means don't use multiprocessing at all.
 
         Returns
         -------
         source_ids : `list` [`int`]
             DiaSourceIds of cutout images that were generated.
         """
-        result = self.write_images(data, butler)
+        result = self.write_images(data, butler, njobs=njobs)
         self.write_manifest(result)
         self.log.info("Wrote %d images to %s", len(result), self._output_path)
         return result
@@ -168,7 +165,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         manifest["metadata:diaSourceId"] = sources
         return manifest
 
-    def write_images(self, data, butler):
+    def write_images(self, data, butler, njobs=0):
         """Make the 3-part cutout images for each requested source and write
         them to disk.
 
@@ -183,6 +180,9 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         butler : `lsst.daf.butler.Butler`
             The butler connection to use to load the data; create it with the
             collections you wish to load images from.
+        njobs : `int`, optional
+            Number of multiprocessing jobs to make cutouts with; default of 0
+            means don't use multiprocessing at all.
 
         Returns
         -------
@@ -199,8 +199,8 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         pathlib.Path(os.path.join(self._output_path, "images")).mkdir(exist_ok=True)
 
         sources = []
-        if self.config.n_processes > 0:
-            with multiprocessing.Pool(self.config.n_processes) as pool:
+        if njobs > 0:
+            with multiprocessing.Pool(njobs) as pool:
                 sources = pool.starmap(self._do_one_source, zip(data.to_records(), flags,
                                                                 itertools.repeat(butler)))
         else:
@@ -215,6 +215,22 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
 
     def _do_one_source(self, source, flags, butler):
         """Make cutouts for one diaSource.
+
+        Parameters
+        ----------
+        source : `numpy.record`, optional
+            DiaSource record for this cutout, to add metadata to the image.
+        flags : `str`, optional
+            Unpacked bits from the ``flags`` field in ``source``.
+            Required if ``source`` is not None.
+        butler : `lsst.daf.butler.Butler`
+            Butler connection to use to load the data; create it with the
+            collections you wish to load images from.
+
+        Returns
+        -------
+        diaSourceId : `int` or None
+            Id of the source that was generated, or None if there was an error.
         """
         @functools.lru_cache(maxsize=4)
         def get_exposures(instrument, detector, visit):
@@ -572,6 +588,15 @@ def build_argparser():
     )
 
     parser.add_argument(
+        "-j",
+        "--jobs",
+        default=0,
+        type=int,
+        help="Number of processes to use when generating cutouts. "
+             "Specify 0 (the default) to not use multiprocessing at all."
+    )
+
+    parser.add_argument(
         "--instrument",
         required=True,
         help="Instrument short-name (e.g. 'DECam') of the data being loaded.",
@@ -715,16 +740,16 @@ def run_cutouts(args):
     config.freeze()
     cutouts = ZooniverseCutoutsTask(config=config, output_path=args.outputPath)
 
-    sources = []
     getter = select_sources(apdb_query, args.limit)
     # Process just one block of length "limit", or all sources in the database?
     if not args.all:
         data = next(getter)
-        sources = cutouts.run(data, butler)
+        sources = cutouts.run(data, butler, njobs=args.jobs)
     else:
+        sources = []
         count = len_sources(apdb_query)
         for i, data in enumerate(getter):
-            sources.extend(cutouts.write_images(data, butler))
+            sources.extend(cutouts.write_images(data, butler, njobs=args.jobs))
             print(f"Completed {i} batches of {args.limit} size, out of {count} diaSources.")
         cutouts.write_manifest(sources)
 
