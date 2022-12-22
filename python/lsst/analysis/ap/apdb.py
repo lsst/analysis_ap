@@ -236,7 +236,8 @@ class ApdbPostgresQuery(DbQuery):
             warnings.filterwarnings("ignore", message="pandas only supports SQLAlchemy connectable")
             _connection = psycopg.connect(self._connection_string)
             cursor = _connection.cursor()
-            cursor.execute("SET search_path TO " + self._namespace)
+            cursor.execute(psycopg.sql.SQL("SET search_path TO {}").format(
+                psycopg.sql.Identifier(self._namespace)))
             try:
                 yield _connection
             finally:

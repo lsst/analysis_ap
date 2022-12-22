@@ -39,6 +39,7 @@ from deprecated.sphinx import deprecated
 import sqlite3
 
 import psycopg2
+from psycopg2 import sql
 import pandas as pd
 
 from lsst.ap.association import UnpackApdbFlags, TransformDiaSourceCatalogConfig
@@ -82,7 +83,8 @@ def connectToApdb(dbName, dbType='sqlite', schema=None,
                                       user=user,
                                       )
         cursor = connection.cursor()
-        cursor.execute("SET search_path TO " + schema)
+        cursor.execute(sql.SQL("SET search_path TO {}").format(
+            sql.Identifier(schema)))
     else:
         raise ValueError(f"dbType must be sqlite or postgres, not {dbType}")
 
