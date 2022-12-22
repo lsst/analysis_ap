@@ -74,6 +74,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         # source at the center of the image
         self.centroid = lsst.geom.Point2D(50, 50)
         dataset = lsst.meas.base.tests.TestDataset(bbox, crval=skyCenter)
+        self.scale = 0.3  # arbitrary arcseconds/pixel
         dataset.addSource(instFlux=1e5, centroid=self.centroid)
         self.science, self.scienceCat = dataset.realize(
             noise=1000.0, schema=dataset.makeMinimalSchema()
@@ -97,9 +98,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
             im.show()
         """
         cutouts = zooniverseCutouts.ZooniverseCutoutsTask()
-        cutout = cutouts.generate_image(
-            self.science, self.template, self.difference, skyCenter
-        )
+        cutout = cutouts.generate_image(self.science, self.template, self.difference, skyCenter, self.scale)
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
             # im.show()
@@ -114,9 +113,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
         config.size = 100
         cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
-        cutout = cutouts.generate_image(
-            self.science, self.template, self.difference, skyCenter
-        )
+        cutout = cutouts.generate_image(self.science, self.template, self.difference, skyCenter, self.scale)
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
             # im.show()
@@ -138,6 +135,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
                                         self.template,
                                         self.difference,
                                         skyCenter,
+                                        self.scale,
                                         source=DATA.iloc[0],
                                         flags=self.flags[0])
         with PIL.Image.open(cutout) as im:
@@ -152,6 +150,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
                                         self.template,
                                         self.difference,
                                         skyCenter,
+                                        self.scale,
                                         source=DATA.iloc[1],
                                         flags=self.flags[1])
         with PIL.Image.open(cutout) as im:

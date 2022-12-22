@@ -75,6 +75,7 @@ An example cutout image is shown below, in the format that would be most commonl
 The two below examples show what is produced when the ``addMetadata`` config field is set.
 The first image shows a mocked image with no catalog flags set.
 The source id, instrument, detector, visit, and filter name are given on the top row.
+The pixel scale in arcseconds/pixel is shown as a small bar in the lower-left corner of each image.
 The ``PSF`` and ``ap`` flux fields are fluxes on the difference image, while the ``total`` flux field is the forced flux on the science image, and the AB magnitude computed from that forced flux.
 Note that there is no colored text; this would represent a likely good difference image source measurement.
 
