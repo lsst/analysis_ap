@@ -66,15 +66,13 @@ class DbQuery(abc.ABC):
         """
         pass
 
-    def load_sources_for_object(self, dia_object_id, limit=100000):
+    def load_sources_for_object(self, dia_object_id):
         """Load diaSources for a single diaObject.
 
         Parameters
         ----------
         dia_object_id : `int`
             Id of object to load sources for.
-        limit : `int`
-            Maximum number of rows to return.
 
         Returns
         -------
@@ -83,10 +81,9 @@ class DbQuery(abc.ABC):
         """
         with self.connection as connection:
             order = 'ORDER BY "ccdVisitId", "diaSourceId"'
-            limit_str = f"LIMIT {limit}" if limit is not None else ""
             query = ('SELECT * FROM "DiaSource"'
                      f' WHERE "DiaSource"."diaObjectId" = {dia_object_id}'
-                     f' {order} {limit_str};')
+                     f' {order};')
             result = pd.read_sql_query(query, connection)
         self._fill_from_ccdVisitId(result)
         return result

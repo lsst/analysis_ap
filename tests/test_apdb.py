@@ -56,13 +56,11 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         sources = self.apdb.load_sources(limit=2)
         self.assertEqual(len(sources), 2)
 
-    def load_sources_for_object(self):
+    def test_load_sources_for_object(self):
         sources = self.apdb.load_sources_for_object(224948952930189335)
+        # This test APDB has only one source per object.
         self.assertEqual(len(sources), 1)
-        self.assertEqual(sources['diaSourceId'], 224948952930189335)
-
-        sources = self.apdb.load_sources(limit=2)
-        self.assertEqual(len(sources), 2)
+        self.assertEqual(sources['diaSourceId'][0], 224948952930189335)
 
     def test_load_objects(self):
         objects = self.apdb.load_objects()
@@ -72,7 +70,7 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         self.assertEqual(objects['diaObjectId'][0], 224948952930189335)
         self.assertIn("validityStart", objects.columns)
 
-        sources = self.apdb.load_sources(limit=2)
+        sources = self.apdb.load_objects(limit=2)
         self.assertEqual(len(sources), 2)
 
     def test_load_forced_sources(self):
@@ -84,7 +82,7 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         self.assertEqual(sources['detector'][0], 76)
         self.assertEqual(sources['visit'][0], 4190000)
 
-        sources = self.apdb.load_sources(limit=2)
+        sources = self.apdb.load_forced_sources(limit=2)
         self.assertEqual(len(sources), 2)
 
 
