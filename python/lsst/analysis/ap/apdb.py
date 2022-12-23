@@ -58,13 +58,17 @@ class DbQuery(abc.ABC):
         self._butler = butler
         self._instrument = instrument
 
-        self.set_bad_DiaSource_flags(['base_PixelFlags_flag_bad',
-                                      'base_PixelFlags_flag_suspect',
-                                      'base_PixelFlags_flag_saturatedCenter',
-                                      'base_PixelFlags_flag_interpolated',
-                                      'base_PixelFlags_flag_interpolatedCenter',
-                                      'base_PixelFlags_flag_edge',
-                                      ])
+        flag_map = os.path.join(lsst.utils.getPackageDir("ap_association"),
+                                "data/association-flag-map.yaml")
+        self._unpacker = UnpackApdbFlags(flag_map, "DiaSource")
+
+        self.set_excluded_diaSource_flags(['base_PixelFlags_flag_bad',
+                                           'base_PixelFlags_flag_suspect',
+                                           'base_PixelFlags_flag_saturatedCenter',
+                                           'base_PixelFlags_flag_interpolated',
+                                           'base_PixelFlags_flag_interpolatedCenter',
+                                           'base_PixelFlags_flag_edge',
+                                           ])
 
     @property
     @contextlib.contextmanager
@@ -78,24 +82,24 @@ class DbQuery(abc.ABC):
         """
         pass
 
-    def set_bad_DiaSource_flags(self, flag_list):
-        """Set DiaSource flags to exclude.
+    def set_excluded_diaSource_flags(self, flag_list):
+        """Set flags of diaSources to exclude when loading diaSources.
+
+        Any diaSources with configured flags are not returned
+        when calling `load_sources_for_object` or `load_sources`
+        with `exclude_flagged = True`.
 
         Parameters
         ----------
         flag_list : `list` [`str`]
-            Flag names to exclude
+            Flag names to exclude.
         """
 
-        flag_map = os.path.join(lsst.utils.getPackageDir("ap_association"),
-                                "data/association-flag-map.yaml")
-        unpacker = UnpackApdbFlags(flag_map, "DiaSource")
-
         for flag in flag_list:
-            if flag not in [c[0] for c in unpacker.output_flag_columns['flags']]:
+            if flag not in [c[0] for c in self._unpacker.output_flag_columns['flags']]:
                 raise ValueError(f"flag {flag} not included in DiaSource flags")
 
-        self.bad_DiaSource_flags = flag_list
+        self.diaSource_flags_exclude = flag_list
 
     def _make_flag_exclusion_clause(self, flag_list, column_name='flags',
                                     table_name="DiaSource"):
@@ -104,26 +108,22 @@ class DbQuery(abc.ABC):
         Parameters
         ----------
         flag_list : `list` [`str`]
-            Flag names to exclude
+            Flag names to exclude.
         column_name : `str`, optional
-            Name of flag column (default `'flags'`)
+            Name of flag column.
         table_name : `str`, optional
-            Name of table (default `'DiaSource'`)
+            Name of table.
 
         Returns
         -------
         clause : `str`
-            clause to include in the SQL where statement
+            Clause to include in the SQL where statement.
         """
 
-        flag_map = os.path.join(lsst.utils.getPackageDir("ap_association"),
-                                "data/association-flag-map.yaml")
-        unpacker = UnpackApdbFlags(flag_map, table_name)
+        bitmask = self._unpacker.makeFlagBitMask(flag_list, columnName=column_name)
 
-        bitmask = unpacker.makeFlagBitMask(flag_list,
-                                           columnName=column_name)
-
-        # TODO: consider warning if bitmask is zero
+        if bitmask == 0:
+            warnings.warn("Flag bitmask is zero", RuntimeWarning)
 
         return f"(({column_name} & {bitmask}) = 0)"
 
@@ -135,8 +135,9 @@ class DbQuery(abc.ABC):
         dia_object_id : `int`
             Id of object to load sources for.
         exclude_flagged : `bool`, optional
-            If True, do not return records with configurable flags
-            (default `False`)
+            Exclude sources that have selected flags set.
+            Use `set_DiaSource_exclude_flags` to configure which flags
+            are excluded.
         limit : `int`
             Maximum number of rows to return.
 
@@ -149,7 +150,7 @@ class DbQuery(abc.ABC):
         where_clauses = [f'"DiaSource"."diaObjectId" = {dia_object_id}']
 
         if exclude_flagged:
-            where_clauses.append(self._make_flag_exclusion_clause(self.bad_DiaSource_flags))
+            where_clauses.append(self._make_flag_exclusion_clause(self.diaSource_flags_exclude))
 
         where = "WHERE " + " and ".join(where_clauses) if len(where_clauses) else ""
 
@@ -170,8 +171,9 @@ class DbQuery(abc.ABC):
         Parameters
         ----------
         exclude_flagged : `bool`, optional
-            If True, do not return records with configurable flags
-            (default `False`)
+            Exclude sources that have selected flags set.
+            Use `set_DiaSource_exclude_flags` to configure which flags
+            are excluded.
         limit : `int`
             Maximum number of rows to return.
 
@@ -184,7 +186,7 @@ class DbQuery(abc.ABC):
         where_clauses = []
 
         if exclude_flagged:
-            where_clauses.append(self._make_flag_exclusion_clause(self.bad_DiaSource_flags))
+            where_clauses.append(self._make_flag_exclusion_clause(self.diaSource_flags_exclude))
 
         where = "WHERE " + " and ".join(where_clauses) if len(where_clauses) else ""
 
