@@ -214,10 +214,10 @@ class DbQuery(abc.ABC):
         data : `pandas.DataFrame`
             All available diaObjects.
         """
+        order = 'ORDER BY "diaObjectId"'
+        limit_str = f"LIMIT {limit}" if limit is not None else ""
+        query = f'SELECT * FROM "DiaObject" {order} {limit_str};'
         with self.connection as connection:
-            order = 'ORDER BY "diaObjectId"'
-            limit_str = f"LIMIT {limit}" if limit is not None else ""
-            query = f'SELECT * FROM "DiaObject" {order} {limit_str};'
             result = pd.read_sql_query(query, connection)
         return result
 
@@ -234,10 +234,10 @@ class DbQuery(abc.ABC):
         data : `pandas.DataFrame`
             All available diaForcedSources.
         """
+        order = 'ORDER BY "ccdVisitId", "diaSourceId"'
+        limit_str = f"LIMIT {limit}" if limit is not None else ""
+        query = f'SELECT * FROM "DiaForcedSource" {order} {limit_str};'
         with self.connection as connection:
-            order = 'ORDER BY "ccdVisitId", "diaSourceId"'
-            limit_str = f"LIMIT {limit}" if limit is not None else ""
-            query = f'SELECT * FROM "DiaForcedSource" {order} {limit_str};'
             result = pd.read_sql_query(query, connection)
         self._fill_from_ccdVisitId(result)
         return result
