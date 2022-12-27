@@ -96,7 +96,7 @@ class DbQuery(abc.ABC):
         """
 
         for flag in flag_list:
-            if flag not in [c[0] for c in self._unpacker.output_flag_columns['flags']]:
+            if not self._unpacker.flagExists(flag, columnName='flags'):
                 raise ValueError(f"flag {flag} not included in DiaSource flags")
 
         self.diaSource_flags_exclude = flag_list
