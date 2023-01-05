@@ -36,12 +36,15 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         apdb_file = os.path.join(datadir, "apdb.sqlite3")
 
         # TODO: only necessary until we can get detector/visit from APDB
-        path = tempfile.TemporaryDirectory()
-        lsst.daf.butler.Butler.makeRepo(path.name)
-        butler = lsst.daf.butler.Butler(path.name, writeable=True)
+        self.path = tempfile.TemporaryDirectory()
+        lsst.daf.butler.Butler.makeRepo(self.path.name)
+        butler = lsst.daf.butler.Butler(self.path.name, writeable=True)
         DarkEnergyCamera().register(butler.registry, update=True)
 
         self.apdb = ApdbSqliteQuery(apdb_file, butler=butler, instrument="DECam")
+
+    def tearDown(self):
+        self.path.cleanup()
 
     def test_load_sources(self):
         sources = self.apdb.load_sources()
