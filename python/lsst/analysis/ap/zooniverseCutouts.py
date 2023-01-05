@@ -75,9 +75,9 @@ class ZooniverseCutoutsConfig(pexConfig.Config):
     )
     chunk_size = pexConfig.Field(
         doc="Chunk up files into subdirectories, with at most this many files per directory."
-            " None (default) means write all the files to one `images/` directory.",
+            " None means write all the files to one `images/` directory.",
         dtype=int,
-        default=None,
+        default=10000,
         optional=True
     )
 

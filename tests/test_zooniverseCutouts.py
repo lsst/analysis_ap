@@ -194,7 +194,8 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
             cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path=path)
             result = cutouts.write_images(DATA, butler)
             self.assertEqual(result, list(DATA["diaSourceId"]))
-            for file in ("images/506428274000265570.png", "images/527736141479149732.png"):
+            for file in ("images/506428274000260000/506428274000265570.png",
+                         "images/527736141479140000/527736141479149732.png"):
                 filename = os.path.join(path, file)
                 self.assertTrue(os.path.exists(filename))
                 with PIL.Image.open(filename) as image:
