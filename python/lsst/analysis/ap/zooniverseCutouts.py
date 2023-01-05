@@ -109,7 +109,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
 
         Returns
         -------
-        source_ids : `list`
+        source_ids : `list` [`int`]
             DiaSourceIds of cutout images that were generated.
         """
         result = self.write_images(data, butler, outputPath)
@@ -203,12 +203,13 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
                                                                 itertools.repeat(outputPath)))
         else:
             for i, source in enumerate(data.to_records()):
-                temp = self._do_one_source(source, flags[i], butler, outputPath)
-                if temp is not None:
-                    sources.append(temp)
+                id = self._do_one_source(source, flags[i], butler)
+                sources.append(id)
 
+        # restore numpy error message state
         np.seterr(**seterr_dict)
-        return sources
+        # Only return successful ids, not failures.
+        return [s for s in sources if s is not None]
 
     def _do_one_source(self, source, flags, butler, outputPath):
         """Make cutouts for one diaSource.
