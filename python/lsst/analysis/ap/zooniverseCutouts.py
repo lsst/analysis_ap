@@ -23,21 +23,26 @@
 to just to view as images.
 """
 
-__all__ = ["ZooniverseCutoutsConfig", "ZooniverseCutoutsTask"]
+__all__ = ["ZooniverseCutoutsConfig", "ZooniverseCutoutsTask", "CutoutPath"]
 
 import argparse
 import functools
 import io
+import itertools
 import logging
+from math import log10
+import multiprocessing
 import os
 import pathlib
 
 import astropy.units as u
+import numpy as np
 import pandas as pd
 
 from lsst.ap.association import UnpackApdbFlags
 import lsst.dax.apdb
 import lsst.pex.config as pexConfig
+import lsst.pex.exceptions
 import lsst.pipe.base
 import lsst.utils
 
@@ -50,33 +55,57 @@ class ZooniverseCutoutsConfig(pexConfig.Config):
         dtype=int,
         default=30,
     )
-    urlRoot = pexConfig.Field(
+    url_root = pexConfig.Field(
         doc="URL that the resulting images will be served to Zooniverse from, for the manifest file. "
             "If not set, no manifest file will be written.",
         dtype=str,
         default=None,
         optional=True,
     )
-    diffImageType = pexConfig.Field(
+    diff_image_type = pexConfig.Field(
         doc="Dataset type of template and difference image to use for cutouts; "
             "Will have '_templateExp' and '_differenceExp' appended for butler.get(), respectively.",
         dtype=str,
         default="deepDiff",
     )
-    addMetadata = pexConfig.Field(
+    add_metadata = pexConfig.Field(
         doc="Annotate the cutouts with catalog metadata, including coordinates, fluxes, flags, etc.",
         dtype=bool,
         default=False
     )
+    chunk_size = pexConfig.Field(
+        doc="Chunk up files into subdirectories, with at most this many files per directory."
+            " None means write all the files to one `images/` directory.",
+        dtype=int,
+        default=10000,
+        optional=True
+    )
 
 
 class ZooniverseCutoutsTask(lsst.pipe.base.Task):
-    """Generate cutouts and a manifest for upload to a Zooniverse project."""
+    """Generate cutouts and a manifest for upload to a Zooniverse project.
 
+    Parameters
+    ----------
+    output_path : `str`
+        The path to write the output to; manifest goes here, while the
+        images themselves go into ``output_path/images/``.
+    """
     ConfigClass = ZooniverseCutoutsConfig
     _DefaultName = "zooniverseCutouts"
 
-    def run(self, data, butler, outputPath):
+    def __init__(self, *, output_path, **kwargs):
+        super().__init__(**kwargs)
+        self._output_path = output_path
+        self.cutout_path = CutoutPath(output_path, chunk_size=self.config.chunk_size)
+
+    def _reduce_kwargs(self):
+        # to allow pickling of this Task
+        kwargs = super()._reduce_kwargs()
+        kwargs["output_path"] = self._output_path
+        return kwargs
+
+    def run(self, data, butler, njobs=0):
         """Generate cutouts images and a manifest for upload to Zooniverse
         from a collection of sources.
 
@@ -88,39 +117,35 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         butler : `lsst.daf.butler.Butler`
             The butler connection to use to load the data; create it with the
             collections you wish to load images from.
-        outputPath : `str`
-            The path to write the output to; manifest goes here, while the
-            images themselves go into ``outputPath/images/``.
-        """
-        result = self.write_images(data, butler, outputPath)
-
-        if self.config.urlRoot is not None:
-            manifest = self.make_manifest(result)
-            manifest.to_csv(os.path.join(outputPath, "manifest.csv"), index=False)
-        else:
-            self.log.warning("No urlRoot provided, so no manifest file written.")
-
-        self.log.info("Wrote %d images to %s", len(result), outputPath)
-
-    @staticmethod
-    def _make_path(id, base_path):
-        """Return a URL or file path for this source.
-
-        Parameters
-        ----------
-        id : `int`
-            The source id of the source.
-        base_path : `str`
-            Base URL or directory path, with no ending ``/``.
+        njobs : `int`, optional
+            Number of multiprocessing jobs to make cutouts with; default of 0
+            means don't use multiprocessing at all.
 
         Returns
         -------
-        path : `str`
-            Formatted URL or path.
+        source_ids : `list` [`int`]
+            DiaSourceIds of cutout images that were generated.
         """
-        return f"{base_path}/images/{id}.png"
+        result = self.write_images(data, butler, njobs=njobs)
+        self.write_manifest(result)
+        self.log.info("Wrote %d images to %s", len(result), self._output_path)
+        return result
 
-    def make_manifest(self, sources):
+    def write_manifest(self, sources):
+        """Save a Zooniverse manifest attaching image URLs to source ids.
+
+        Parameters
+        ----------
+        sources : `list` [`int`]
+            The diaSourceIds of the sources that had cutouts succesfully made.
+        """
+        if self.config.url_root is not None:
+            manifest = self.make_manifest(sources)
+            manifest.to_csv(os.path.join(self._output_path, "manifest.csv"), index=False)
+        else:
+            self.log.info("No url_root config provided, so no Zooniverse manifest file was written.")
+
+    def _make_manifest(self, sources):
         """Return a Zooniverse manifest attaching image URLs to source ids.
 
         Parameters
@@ -133,19 +158,18 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         manifest : `pandas.DataFrame`
             The formatted URL manifest for upload to Zooniverse.
         """
+        cutout_path = CutoutPath(self.config.url_root)
         manifest = pd.DataFrame()
         manifest["external_id"] = sources
-        manifest["location:1"] = [
-            self._make_path(x, self.config.urlRoot.rstrip("/")) for x in sources
-        ]
+        manifest["location:1"] = [cutout_path(x) for x in sources]
         manifest["metadata:diaSourceId"] = sources
         return manifest
 
-    def write_images(self, data, butler, outputPath):
+    def write_images(self, data, butler, njobs=0):
         """Make the 3-part cutout images for each requested source and write
         them to disk.
 
-        Creates a ``images/`` subdirectory in ``outputPath`` if one
+        Creates a ``images/`` subdirectory via cutout_path if one
         does not already exist; images are written there as PNG files.
 
         Parameters
@@ -156,15 +180,59 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         butler : `lsst.daf.butler.Butler`
             The butler connection to use to load the data; create it with the
             collections you wish to load images from.
-        outputPath : `str`
-            The path to write the output to; manifest goes here, while the
-            images themselves go into ``outputPath/images/``.
+        njobs : `int`, optional
+            Number of multiprocessing jobs to make cutouts with; default of 0
+            means don't use multiprocessing at all.
+
+        Returns
+        -------
+        sources : `list`
+            DiaSourceIds that had cutouts made.
         """
+        # Ignore divide-by-zero and log-of-negative-value messages.
+        seterr_dict = np.seterr(divide="ignore", invalid="ignore")
         flag_map = os.path.join(lsst.utils.getPackageDir("ap_association"), "data/association-flag-map.yaml")
         unpacker = UnpackApdbFlags(flag_map, "DiaSource")
         flags = unpacker.unpack(data["flags"], "flags")
 
-        @functools.lru_cache(maxsize=16)
+        # Create a subdirectory for the images.
+        pathlib.Path(os.path.join(self._output_path, "images")).mkdir(exist_ok=True)
+
+        sources = []
+        if njobs > 0:
+            with multiprocessing.Pool(njobs) as pool:
+                sources = pool.starmap(self._do_one_source, zip(data.to_records(), flags,
+                                                                itertools.repeat(butler)))
+        else:
+            for i, source in enumerate(data.to_records()):
+                id = self._do_one_source(source, flags[i], butler)
+                sources.append(id)
+
+        # restore numpy error message state
+        np.seterr(**seterr_dict)
+        # Only return successful ids, not failures.
+        return [s for s in sources if s is not None]
+
+    def _do_one_source(self, source, flags, butler):
+        """Make cutouts for one diaSource.
+
+        Parameters
+        ----------
+        source : `numpy.record`, optional
+            DiaSource record for this cutout, to add metadata to the image.
+        flags : `str`, optional
+            Unpacked bits from the ``flags`` field in ``source``.
+            Required if ``source`` is not None.
+        butler : `lsst.daf.butler.Butler`
+            Butler connection to use to load the data; create it with the
+            collections you wish to load images from.
+
+        Returns
+        -------
+        diaSourceId : `int` or None
+            Id of the source that was generated, or None if there was an error.
+        """
+        @functools.lru_cache(maxsize=4)
         def get_exposures(instrument, detector, visit):
             """Return science, template, difference exposures, using a small
             cache so we don't have to re-read files as often.
@@ -178,31 +246,32 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             """
             dataId = {'instrument': instrument, 'detector': detector, 'visit': visit}
             return (butler.get('calexp', dataId),
-                    butler.get(f'{self.config.diffImageType}_templateExp', dataId),
-                    butler.get(f'{self.config.diffImageType}_differenceExp', dataId))
+                    butler.get(f'{self.config.diff_image_type}_templateExp', dataId),
+                    butler.get(f'{self.config.diff_image_type}_differenceExp', dataId))
 
-        # Create a subdirectory for the images.
-        pathlib.Path(os.path.join(outputPath, "images")).mkdir(exist_ok=True)
-
-        result = []
-        for i, source in enumerate(data.to_records()):
-            try:
-                center = lsst.geom.SpherePoint(source["ra"], source["decl"], lsst.geom.degrees)
-                science, template, difference = get_exposures(
-                    source["instrument"], source["detector"], source["visit"]
-                )
-                scale = science.wcs.getPixelScale().asArcseconds()
-                image = self.generate_image(science, template, difference, center, scale,
-                                            source=source if self.config.addMetadata else None,
-                                            flags=flags[i] if self.config.addMetadata else None)
-                with open(self._make_path(source["diaSourceId"], outputPath), "wb") as outfile:
-                    outfile.write(image.getbuffer())
-                result.append(source["diaSourceId"])
-            except LookupError as e:
-                self.log.error(
-                    f"{e.__class__.__name__} processing diaSourceId {source['diaSourceId']}: {e}"
-                )
-        return result
+        try:
+            center = lsst.geom.SpherePoint(source["ra"], source["decl"], lsst.geom.degrees)
+            science, template, difference = get_exposures(source["instrument"],
+                                                          source["detector"],
+                                                          source["visit"])
+            scale = science.wcs.getPixelScale().asArcseconds()
+            image = self.generate_image(science, template, difference, center, scale,
+                                        source=source if self.config.add_metadata else None,
+                                        flags=flags if self.config.add_metadata else None)
+            self.cutout_path.mkdir(source["diaSourceId"])
+            with open(self.cutout_path(source["diaSourceId"]), "wb") as outfile:
+                outfile.write(image.getbuffer())
+            return source["diaSourceId"]
+        except (LookupError, lsst.pex.exceptions.Exception) as e:
+            self.log.error(
+                f"{e.__class__.__name__} processing diaSourceId {source['diaSourceId']}: {e}"
+            )
+            return None
+        except Exception:
+            # Ensure other exceptions are interpretable when multiprocessing.
+            import traceback
+            traceback.print_exc()
+            raise
 
     def generate_image(self, science, template, difference, center, scale, source=None, flags=None):
         """Get a 3-part cutout image to save to disk, for a single source.
@@ -414,6 +483,62 @@ def _annotate_image(fig, source, flags):
     fig.text(0.635, 0.79, f"{(source['totFlux']*u.nanojansky).to_value(u.ABmag):.3f}")
 
 
+class CutoutPath:
+    """Manage paths to image cutouts with filenames based on diaSourceId.
+
+    Supports local files, and id-chunked directories.
+
+    Parameters
+    ----------
+    root : `str`
+        Root file path to manage.
+    chunk_size : `int`, optional
+        At most this many files per directory. Must be a power of 10.
+
+    Raises
+    ------
+    RuntimeError
+        Raised if chunk_size is not a power of 10.
+    """
+    def __init__(self, root, chunk_size=None):
+        self._root = root
+        if chunk_size is not None and (log10(chunk_size) != int(log10(chunk_size))):
+            raise RuntimeError(f"CutoutPath file chunk_size must be a power of 10, got {chunk_size}.")
+        self._chunk_size = chunk_size
+
+    def __call__(self, id):
+        """Return the full path to a diaSource cutout.
+
+        Parameters
+        ----------
+        id : `int`
+            Source id to create the path for.
+
+        Returns
+        -------
+        path : `str`
+            Full path to the requested file.
+        """
+        def chunker(id, size):
+            return (id // size)*size
+
+        if self._chunk_size is not None:
+            return os.path.join(self._root, f"images/{chunker(id, self._chunk_size)}/{id}.png")
+        else:
+            return os.path.join(self._root, f"images/{id}.png")
+
+    def mkdir(self, id):
+        """Make the directory tree to write this cutout id to.
+
+        Parameters
+        ----------
+        id : `int`
+            Source id to create the path for.
+        """
+        path = os.path.dirname(self(id))
+        os.makedirs(path, exist_ok=True)
+
+
 def build_argparser():
     """Construct an argument parser for the ``zooniverseCutouts`` script.
 
@@ -449,10 +574,26 @@ def build_argparser():
     )
 
     parser.add_argument(
-        "-n",
+        "--limit",
         default=5,
         type=int,
-        help="Number of sources to load randomly from the APDB (default=5).",
+        help="Number of sources to load from the APDB (default=5), or the "
+             "number of sources to load per 'page' when `--all` is set.",
+    )
+    parser.add_argument(
+        "--all",
+        default=False,
+        action="store_true",
+        help="Process all the sources; --limit then becomes the 'page size' to chunk the DB into.",
+    )
+
+    parser.add_argument(
+        "-j",
+        "--jobs",
+        default=0,
+        type=int,
+        help="Number of processes to use when generating cutouts. "
+             "Specify 0 (the default) to not use multiprocessing at all."
     )
 
     parser.add_argument(
@@ -483,35 +624,93 @@ def build_argparser():
     return parser
 
 
-def select_sources(butler, instrument, n, sqlitefile=None, postgres_url=None, namespace=None):
-    """Load an APDB and select n objects randomly from it.
+def _make_apdbQuery(butler, instrument, sqlitefile=None, postgres_url=None, namespace=None):
+    """Return a query connection to the specified APDB.
 
     Parameters
     ----------
     butler : `lsst.daf.butler.Butler`
-        A butler instance to use to fill out detector/visit information.
-    instrument : `str`
-        Instrument that produced these data, to fill out a new column.
-    n : `int`
-        Number of sources to randomly select from the APDB.
+        Butler to read detector/visit information from.
+    instrument : `lsst.obs.base.Instrument`
+        Instrument associated with this data, to get detector/visit data.
+    sqlitefile : `str`, optional
+        SQLite file to load APDB from; if set, postgres kwargs are ignored.
+    postgres_url : `str`, optional
+        Postgres connection URL to connect to APDB.
+    namespace : `str`, optional
+        Postgres schema to load from; required with postgres_url.
+
+    Returns
+    -------
+    apdb_query : `lsst.analysis.ap.ApdbQuery`
+        Query instance to use to load data from APDB.
+
+    Raises
+    ------
+    RuntimeError
+        Raised if the APDB connection kwargs are invalid in some way.
+    """
+    if sqlitefile is not None:
+        apdb_query = apdb.ApdbSqliteQuery(sqlitefile, butler=butler, instrument=instrument)
+    elif postgres_url is not None and namespace is not None:
+        apdb_query = apdb.ApdbPostgresQuery(namespace, postgres_url, butler=butler, instrument=instrument)
+    else:
+        raise RuntimeError("Cannot handle database connection args: "
+                           f"sqlitefile={sqlitefile}, postgres_url={postgres_url}, namespace={namespace}")
+    return apdb_query
+
+
+def select_sources(apdb_query, limit):
+    """Load an APDB and return n sources from it.
+
+    Parameters
+    ----------
+    apdb_query : `lsst.analysis.ap.ApdbQuery`
+        APDB query interface to load from.
+    limit : `int`
+        Number of sources to select from the APDB.
 
     Returns
     -------
     sources : `pandas.DataFrame`
         The loaded DiaSource data.
     """
-    if sqlitefile is not None:
-        apdbQuery = apdb.ApdbSqliteQuery(sqlitefile, butler=butler, instrument=instrument)
-    elif postgres_url is not None and namespace is not None:
-        apdbQuery = apdb.ApdbPostgresQuery(namespace, postgres_url, butler=butler, instrument=instrument)
-    else:
-        raise RuntimeError("Cannot handle database connection args: "
-                           f"sqlitefile={sqlitefile}, postgres_url={postgres_url}, namespace={namespace}")
+    offset = 0
+    try:
+        while True:
+            with apdb_query.connection as connection:
+                sources = pd.read_sql_query(
+                    'select * FROM "DiaSource" ORDER BY "ccdVisitId", '
+                    f'"diaSourceId" LIMIT {limit} OFFSET {offset};',
+                    connection)
+            if len(sources) == 0:
+                break
+            apdb_query._fill_from_ccdVisitId(sources)
 
-    with apdbQuery.connection as connection:
-        sources = pd.read_sql_query(f'select * from "DiaSource" ORDER BY RANDOM() LIMIT {n};', connection)
-    apdbQuery._fill_from_ccdVisitId(sources)
-    return sources
+            yield sources
+            offset += limit
+    finally:
+        connection.close()
+
+
+def len_sources(apdb_query):
+    """Return the number of DiaSources in the supplied APDB.
+
+    Parameters
+    ----------
+    apdb_query : `lsst.analysis.ap.ApdbQuery`
+        APDB query interface to load from.
+
+    Returns
+    -------
+    count : `int`
+        Number of diaSources in this APDB.
+    """
+    with apdb_query.connection as connection:
+        cursor = connection.cursor()
+        cursor.execute('select count(*) FROM "DiaSource";')
+        count = cursor.fetchone()[0]
+    return count
 
 
 def run_cutouts(args):
@@ -528,18 +727,33 @@ def run_cutouts(args):
     )
 
     butler = lsst.daf.butler.Butler(args.repo, collections=args.collections)
-    data = select_sources(butler, args.instrument, args.n,
-                          sqlitefile=args.sqlitefile,
-                          postgres_url=args.postgres_url,
-                          namespace=args.namespace)
+    apdb_query = _make_apdbQuery(butler,
+                                 args.instrument,
+                                 sqlitefile=args.sqlitefile,
+                                 postgres_url=args.postgres_url,
+                                 namespace=args.namespace)
+    data = select_sources(apdb_query, args.limit)
 
     config = ZooniverseCutoutsConfig()
     if args.configFile is not None:
         config.load(os.path.expanduser(args.configFile))
-    config.validate()
     config.freeze()
-    cutouts = ZooniverseCutoutsTask(config=config)
-    cutouts.run(data, butler, args.outputPath)
+    cutouts = ZooniverseCutoutsTask(config=config, output_path=args.outputPath)
+
+    getter = select_sources(apdb_query, args.limit)
+    # Process just one block of length "limit", or all sources in the database?
+    if not args.all:
+        data = next(getter)
+        sources = cutouts.run(data, butler, njobs=args.jobs)
+    else:
+        sources = []
+        count = len_sources(apdb_query)
+        for i, data in enumerate(getter):
+            sources.extend(cutouts.write_images(data, butler, njobs=args.jobs))
+            print(f"Completed {i} batches of {args.limit} size, out of {count} diaSources.")
+        cutouts.write_manifest(sources)
+
+    print(f"Generated {len(sources)} diaSource cutouts to {args.outputPath}.")
 
 
 def main():

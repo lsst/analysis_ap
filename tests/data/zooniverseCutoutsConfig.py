@@ -1,2 +1,2 @@
-# Config override for the required url field.
-config.urlRoot = "https://example.com/zooniverse"
+# So we always check the manifest codepath.
+config.url_root = "https://example.com/zooniverse"

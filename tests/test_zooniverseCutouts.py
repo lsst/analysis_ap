@@ -20,6 +20,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import os
+import pickle
 import sys
 import tempfile
 import unittest
@@ -68,7 +69,6 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
     """Test that ZooniverseCutoutsTask generates images and manifest files
     correctly.
     """
-
     def setUp(self):
         bbox = lsst.geom.Box2I(lsst.geom.Point2I(0, 0), lsst.geom.Point2I(100, 100))
         # source at the center of the image
@@ -97,7 +97,8 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         It's useful to have a person look at the output via:
             im.show()
         """
-        cutouts = zooniverseCutouts.ZooniverseCutoutsTask()
+        # output_path does nothing here, since we never write the file to disk.
+        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(output_path="")
         cutout = cutouts.generate_image(self.science, self.template, self.difference, skyCenter, self.scale)
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
@@ -112,7 +113,8 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         """
         config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
         config.size = 100
-        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
+        # output_path does nothing here, since we never write the file to disk.
+        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path="")
         cutout = cutouts.generate_image(self.science, self.template, self.difference, skyCenter, self.scale)
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
@@ -129,8 +131,9 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
             im.show()
         """
         config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
-        config.addMetadata = True
-        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
+        config.add_metadata = True
+        # output_path does nothing here, since we never write the file to disk.
+        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path="")
         cutout = cutouts.generate_image(self.science,
                                         self.template,
                                         self.difference,
@@ -160,6 +163,25 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
             # size (in inches) and the dpi (default=100), plus borders.
             self.assertEqual((im.height, im.width), (343, 645))
 
+    def test_generate_image_invalid_paramters(self):
+        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(output_path="")
+        with self.assertRaisesRegex(RuntimeError, "Must pass both"):
+            cutouts.generate_image(self.science,
+                                   self.template,
+                                   self.difference,
+                                   skyCenter,
+                                   self.scale,
+                                   source=DATA.iloc[1],
+                                   flags=None)
+        with self.assertRaisesRegex(RuntimeError, "Must pass both"):
+            cutouts.generate_image(self.science,
+                                   self.template,
+                                   self.difference,
+                                   skyCenter,
+                                   self.scale,
+                                   source=None,
+                                   flags=self.flags[1])
+
     def test_write_images(self):
         """Test that images get written to a temporary directory."""
         butler = unittest.mock.Mock(spec=lsst.daf.butler.Butler)
@@ -169,10 +191,11 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
 
         with tempfile.TemporaryDirectory() as path:
             config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
-            cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
-            result = cutouts.write_images(DATA, butler, path)
+            cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path=path)
+            result = cutouts.write_images(DATA, butler)
             self.assertEqual(result, list(DATA["diaSourceId"]))
-            for file in ("images/506428274000265570.png", "images/527736141479149732.png"):
+            for file in ("images/506428274000260000/506428274000265570.png",
+                         "images/527736141479140000/527736141479149732.png"):
                 filename = os.path.join(path, file)
                 self.assertTrue(os.path.exists(filename))
                 with PIL.Image.open(filename) as image:
@@ -186,10 +209,10 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
 
         with tempfile.TemporaryDirectory() as path:
             config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
-            cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
+            cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path=path)
 
             with self.assertLogs("lsst.zooniverseCutouts", "ERROR") as cm:
-                cutouts.write_images(DATA, butler, path)
+                cutouts.write_images(DATA, butler)
             self.assertIn(
                 "LookupError processing diaSourceId 506428274000265570: Dataset not found", cm.output[0]
             )
@@ -201,9 +224,10 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         """Check that make_manifest returns an appropriate DataFrame."""
         data = [5, 10, 20]
         config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
-        config.urlRoot = url_root
-        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config)
-        manifest = cutouts.make_manifest(data)
+        config.url_root = url_root
+        # output_path does nothing here
+        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path="")
+        manifest = cutouts._make_manifest(data)
         self.assertEqual(manifest["metadata:diaSourceId"].to_list(), [5, 10, 20])
         self.assertEqual(manifest["location:1"].to_list(), url_list)
 
@@ -226,10 +250,19 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         ]
         self.check_make_manifest(root, url_list)
 
+    def test_pickle(self):
+        """Test that the task is pickleable (necessary for multiprocessing).
+        """
+        config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
+        config.size = 63
+        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path="something")
+        other = pickle.loads(pickle.dumps(cutouts))
+        self.assertEqual(cutouts.config.size, other.config.size)
+        self.assertEqual(cutouts._output_path, other._output_path)
+
 
 class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
     """Test the commandline interface main() function via mocks."""
-
     def setUp(self):
         datadir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/")
         self.sqlitefile = os.path.join(datadir, "apdb.sqlite3")
@@ -273,7 +306,6 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
             # NOTE: can't easily test the `data` arg to run, as select_sources
             # reads in a random order every time.
             self.assertEqual(run.call_args.args[2], self._butler.return_value)
-            self.assertEqual(run.call_args.args[3], self.outputPath)
 
     def test_main_args_no_collections(self):
         """Test with no collections argument."""
@@ -291,8 +323,8 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
             zooniverseCutouts.main()
             self.assertEqual(self._butler.call_args.args, (self.repo,))
             self.assertEqual(self._butler.call_args.kwargs, {"collections": None})
+            self.assertIsInstance(run.call_args.args[1], pd.DataFrame)
             self.assertEqual(run.call_args.args[2], self._butler.return_value)
-            self.assertEqual(run.call_args.args[3], self.outputPath)
 
     def test_main_collection_list(self):
         """Test passing a list of collections."""
@@ -315,8 +347,92 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
             self.assertEqual(
                 self._butler.call_args.kwargs, {"collections": collections}
             )
+            self.assertIsInstance(run.call_args.args[1], pd.DataFrame)
             self.assertEqual(run.call_args.args[2], self._butler.return_value)
-            self.assertEqual(run.call_args.args[3], self.outputPath)
+
+    def test_main_args_limit_offset(self):
+        """Test typical arguments to main()."""
+        args = [
+            "zooniverseCutouts",
+            f"--sqlitefile={self.sqlitefile}",
+            f"--collections={self.collection}",
+            f"-C={self.configFile}",
+            f"--instrument={self.instrument}",
+            "--all",
+            "--limit=5",
+            self.repo,
+            self.outputPath,
+        ]
+        with unittest.mock.patch.object(
+            zooniverseCutouts.ZooniverseCutoutsTask, "write_images", autospec=True,
+            return_value=[5]
+        ) as write_images, unittest.mock.patch.object(
+            zooniverseCutouts.ZooniverseCutoutsTask, "write_manifest", autospec=True
+        ) as write_manifest, unittest.mock.patch.object(sys, "argv", args):
+            zooniverseCutouts.main()
+            self.assertEqual(self._butler.call_args.args, (self.repo,))
+            self.assertEqual(
+                self._butler.call_args.kwargs, {"collections": [self.collection]}
+            )
+            self.assertIsInstance(write_images.call_args.args[1], pd.DataFrame)
+            self.assertEqual(write_images.call_args.args[2], self._butler.return_value)
+            # The test apdb contains 15 sources, so we get the return of
+            # `write_images` three times with `limit=5`
+            self.assertEqual(write_manifest.call_args.args[1], [5, 5, 5])
+
+    @unittest.skip("Mock and multiprocess don't mix: https://github.com/python/cpython/issues/100090")
+    def test_main_args_multiprocessing(self):
+        """Test running with multiprocessing.
+        """
+        args = [
+            "zooniverseCutouts",
+            f"--sqlitefile={self.sqlitefile}",
+            f"--collections={self.collection}",
+            "-j2",
+            f"-C={self.configFile}",
+            f"--instrument={self.instrument}",
+            self.repo,
+            self.outputPath,
+        ]
+        with unittest.mock.patch.object(
+            zooniverseCutouts.ZooniverseCutoutsTask, "run", autospec=True
+        ) as run, unittest.mock.patch.object(sys, "argv", args):
+            zooniverseCutouts.main()
+            self.assertEqual(self._butler.call_args.args, (self.repo,))
+            self.assertEqual(self._butler.call_args.kwargs, {"collections": [self.collection]})
+            # NOTE: can't easily test the `data` arg to run, as select_sources
+            # reads in a random order every time.
+            self.assertEqual(run.call_args.args[2], self._butler.return_value)
+
+
+class TestCutoutPath(lsst.utils.tests.TestCase):
+    def test_normal_path(self):
+        """Can the path manager handles non-chunked paths?
+        """
+        manager = zooniverseCutouts.CutoutPath("some/root/path")
+        path = manager(id=12345678)
+        self.assertEqual(path, "some/root/path/images/12345678.png")
+
+    def test_chunking(self):
+        """Can the path manager handle ids chunked into 10,000 file
+        directories?
+        """
+        manager = zooniverseCutouts.CutoutPath("some/root/path", chunk_size=10000)
+        path = manager(id=12345678)
+        self.assertEqual(path, "some/root/path/images/12340000/12345678.png")
+
+    def test_chunk_sizes(self):
+        """Test valid and invalid values for the chunk_size parameter.
+        """
+        with self.assertRaisesRegex(RuntimeError, "chunk_size must be a power of 10"):
+            zooniverseCutouts.CutoutPath("some/root/path", chunk_size=123)
+
+        with self.assertRaisesRegex(RuntimeError, "chunk_size must be a power of 10"):
+            zooniverseCutouts.CutoutPath("some/root/path", chunk_size=12300)
+
+        # should not raise
+        zooniverseCutouts.CutoutPath("some/root/path", chunk_size=1000)
+        zooniverseCutouts.CutoutPath("some/root/path", chunk_size=1000000)
 
 
 class TestMemory(lsst.utils.tests.MemoryTestCase):
