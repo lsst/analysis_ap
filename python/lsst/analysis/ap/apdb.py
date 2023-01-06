@@ -24,6 +24,7 @@
 
 __all__ = ["DbQuery", "ApdbSqliteQuery", "ApdbPostgresQuery"]
 
+import os
 import abc
 import contextlib
 import sqlite3
@@ -31,6 +32,9 @@ import warnings
 
 import pandas as pd
 import psycopg
+
+import lsst.utils
+from lsst.ap.association import UnpackApdbFlags
 
 
 class DbQuery(abc.ABC):
@@ -54,6 +58,18 @@ class DbQuery(abc.ABC):
         self._butler = butler
         self._instrument = instrument
 
+        flag_map = os.path.join(lsst.utils.getPackageDir("ap_association"),
+                                "data/association-flag-map.yaml")
+        self._unpacker = UnpackApdbFlags(flag_map, "DiaSource")
+
+        self.set_excluded_diaSource_flags(['base_PixelFlags_flag_bad',
+                                           'base_PixelFlags_flag_suspect',
+                                           'base_PixelFlags_flag_saturatedCenter',
+                                           'base_PixelFlags_flag_interpolated',
+                                           'base_PixelFlags_flag_interpolatedCenter',
+                                           'base_PixelFlags_flag_edge',
+                                           ])
+
     @property
     @contextlib.contextmanager
     @abc.abstractmethod
@@ -66,33 +82,95 @@ class DbQuery(abc.ABC):
         """
         pass
 
-    def load_sources_for_object(self, dia_object_id):
+    def set_excluded_diaSource_flags(self, flag_list):
+        """Set flags of diaSources to exclude when loading diaSources.
+
+        Any diaSources with configured flags are not returned
+        when calling `load_sources_for_object` or `load_sources`
+        with `exclude_flagged = True`.
+
+        Parameters
+        ----------
+        flag_list : `list` [`str`]
+            Flag names to exclude.
+        """
+
+        for flag in flag_list:
+            if not self._unpacker.flagExists(flag, columnName='flags'):
+                raise ValueError(f"flag {flag} not included in DiaSource flags")
+
+        self.diaSource_flags_exclude = flag_list
+
+    def _make_flag_exclusion_clause(self, flag_list, column_name='flags'):
+        """Create a SQL where clause that excludes sources with chosen flags.
+
+        Parameters
+        ----------
+        flag_list : `list` [`str`]
+            Flag names to exclude.
+        column_name : `str`, optional
+            Name of flag column.
+
+        Returns
+        -------
+        clause : `str`
+            Clause to include in the SQL where statement.
+        """
+
+        bitmask = self._unpacker.makeFlagBitMask(flag_list, columnName=column_name)
+
+        if bitmask == 0:
+            warnings.warn(f"Flag bitmask is zero. Supplied flags: {flag_list}", RuntimeWarning)
+
+        return f"(({column_name} & {bitmask}) = 0)"
+
+    def load_sources_for_object(self, dia_object_id, exclude_flagged=False, limit=100000):
         """Load diaSources for a single diaObject.
 
         Parameters
         ----------
         dia_object_id : `int`
             Id of object to load sources for.
+        exclude_flagged : `bool`, optional
+            Exclude sources that have selected flags set.
+            Use `set_DiaSource_exclude_flags` to configure which flags
+            are excluded.
+        limit : `int`
+            Maximum number of rows to return.
 
         Returns
         -------
         data : `pandas.DataFrame`
             DiaSources for the specified diaObject.
         """
+
+        where_clauses = [f'"DiaSource"."diaObjectId" = {dia_object_id}']
+
+        if exclude_flagged:
+            where_clauses.append(self._make_flag_exclusion_clause(self.diaSource_flags_exclude))
+
+        where = "WHERE " + " and ".join(where_clauses) if len(where_clauses) else ""
+
+        order = 'ORDER BY "ccdVisitId", "diaSourceId"'
+        limit_str = f"LIMIT {limit}" if limit is not None else ""
+        query = ('SELECT * FROM "DiaSource"'
+                 f' {where} {order} {limit_str};')
+
         with self.connection as connection:
-            order = 'ORDER BY "ccdVisitId", "diaSourceId"'
-            query = ('SELECT * FROM "DiaSource"'
-                     f' WHERE "DiaSource"."diaObjectId" = {dia_object_id}'
-                     f' {order};')
             result = pd.read_sql_query(query, connection)
+
         self._fill_from_ccdVisitId(result)
         return result
 
-    def load_sources(self, limit=100000):
-        """Load all DiaSources.
+    def load_sources(self, exclude_flagged=False, limit=100000):
+        """Load DiaSources.
 
         Parameters
         ----------
+        exclude_flagged : `bool`, optional
+            Exclude sources that have selected flags set.
+            Use `set_DiaSource_exclude_flags` to configure which flags
+            are excluded.
         limit : `int`
             Maximum number of rows to return.
 
@@ -101,11 +179,22 @@ class DbQuery(abc.ABC):
         data : `pandas.DataFrame`
             All available diaSources.
         """
+
+        where_clauses = []
+
+        if exclude_flagged:
+            where_clauses.append(self._make_flag_exclusion_clause(self.diaSource_flags_exclude))
+
+        where = "WHERE " + " and ".join(where_clauses) if len(where_clauses) else ""
+
+        order = 'ORDER BY "ccdVisitId", "diaSourceId"'
+        limit_str = f"LIMIT {limit}" if limit is not None else ""
+
+        query = f'SELECT * FROM "DiaSource" {where} {order} {limit_str};'
+
         with self.connection as connection:
-            order = 'ORDER BY "ccdVisitId", "diaSourceId"'
-            limit_str = f"LIMIT {limit}" if limit is not None else ""
-            query = f'SELECT * FROM "DiaSource" {order} {limit_str};'
             result = pd.read_sql_query(query, connection)
+
         self._fill_from_ccdVisitId(result)
         return result
 
@@ -122,10 +211,10 @@ class DbQuery(abc.ABC):
         data : `pandas.DataFrame`
             All available diaObjects.
         """
+        order = 'ORDER BY "diaObjectId"'
+        limit_str = f"LIMIT {limit}" if limit is not None else ""
+        query = f'SELECT * FROM "DiaObject" {order} {limit_str};'
         with self.connection as connection:
-            order = 'ORDER BY "diaObjectId"'
-            limit_str = f"LIMIT {limit}" if limit is not None else ""
-            query = f'SELECT * FROM "DiaObject" {order} {limit_str};'
             result = pd.read_sql_query(query, connection)
         return result
 
@@ -142,10 +231,10 @@ class DbQuery(abc.ABC):
         data : `pandas.DataFrame`
             All available diaForcedSources.
         """
+        order = 'ORDER BY "ccdVisitId", "diaSourceId"'
+        limit_str = f"LIMIT {limit}" if limit is not None else ""
+        query = f'SELECT * FROM "DiaForcedSource" {order} {limit_str};'
         with self.connection as connection:
-            order = 'ORDER BY "ccdVisitId", "diaSourceId"'
-            limit_str = f"LIMIT {limit}" if limit is not None else ""
-            query = f'SELECT * FROM "DiaForcedSource" {order} {limit_str};'
             result = pd.read_sql_query(query, connection)
         self._fill_from_ccdVisitId(result)
         return result

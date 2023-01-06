@@ -61,6 +61,18 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         # This test APDB has only one source per object.
         self.assertEqual(len(sources), 1)
         self.assertEqual(sources['diaSourceId'][0], 224948952930189335)
+        sources = self.apdb.load_sources(exclude_flagged=True)
+        self.assertEqual(len(sources), 11)
+
+    def load_sources_for_object(self):
+        # diaObjectId chosen from inspection to have flagged diaSources
+        sources = self.apdb.load_sources_for_object(224948952930189342)
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources['diaSourceId'], 224948952930189342)
+
+        sources = self.apdb.load_sources_for_object(224948952930189342,
+                                                    exclude_flagged=True)
+        self.assertEqual(len(sources), 0)
 
     def test_load_objects(self):
         objects = self.apdb.load_objects()
@@ -84,6 +96,22 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
 
         sources = self.apdb.load_forced_sources(limit=2)
         self.assertEqual(len(sources), 2)
+
+    def test_make_flag_exclusion_clause(self):
+        # test clause generation with default flag list
+        clause = self.apdb._make_flag_exclusion_clause(self.apdb.diaSource_flags_exclude)
+        self.assertEqual(clause, "((flags & 972) = 0)")
+
+        with self.assertWarnsRegex(RuntimeWarning, "Flag bitmask is zero."):
+            clause = self.apdb._make_flag_exclusion_clause([])
+
+    def test_set_excluded_diaSource_flags(self):
+        with self.assertRaisesRegex(ValueError, "flag not a real flag not included"):
+            self.apdb.set_excluded_diaSource_flags(['not a real flag'])
+
+        self.apdb.set_excluded_diaSource_flags(['base_PixelFlags_flag'])
+        clause = self.apdb._make_flag_exclusion_clause(self.apdb.diaSource_flags_exclude)
+        self.assertEqual(clause, "((flags & 1) = 0)")
 
 
 class TestMemory(lsst.utils.tests.MemoryTestCase):
