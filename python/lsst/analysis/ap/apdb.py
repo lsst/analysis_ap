@@ -101,8 +101,7 @@ class DbQuery(abc.ABC):
 
         self.diaSource_flags_exclude = flag_list
 
-    def _make_flag_exclusion_clause(self, flag_list, column_name='flags',
-                                    table_name="DiaSource"):
+    def _make_flag_exclusion_clause(self, flag_list, column_name='flags'):
         """Create a SQL where clause that excludes sources with chosen flags.
 
         Parameters
@@ -111,8 +110,6 @@ class DbQuery(abc.ABC):
             Flag names to exclude.
         column_name : `str`, optional
             Name of flag column.
-        table_name : `str`, optional
-            Name of table.
 
         Returns
         -------
@@ -123,7 +120,7 @@ class DbQuery(abc.ABC):
         bitmask = self._unpacker.makeFlagBitMask(flag_list, columnName=column_name)
 
         if bitmask == 0:
-            warnings.warn("Flag bitmask is zero", RuntimeWarning)
+            warnings.warn(f"Flag bitmask is zero. Supplied flags: {flag_list}", RuntimeWarning)
 
         return f"(({column_name} & {bitmask}) = 0)"
 

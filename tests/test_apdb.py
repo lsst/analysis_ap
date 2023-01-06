@@ -98,15 +98,15 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         self.assertEqual(len(sources), 2)
 
     def test_make_flag_exclusion_clause(self):
-        # test clause generation wtith default flag list
+        # test clause generation with default flag list
         clause = self.apdb._make_flag_exclusion_clause(self.apdb.diaSource_flags_exclude)
         self.assertEqual(clause, "((flags & 972) = 0)")
 
-        with self.assertWarns(RuntimeWarning):
+        with self.assertWarnsRegex(RuntimeWarning, "Flag bitmask is zero."):
             clause = self.apdb._make_flag_exclusion_clause([])
 
     def test_set_excluded_diaSource_flags(self):
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "flag not a real flag not included"):
             self.apdb.set_excluded_diaSource_flags(['not a real flag'])
 
         self.apdb.set_excluded_diaSource_flags(['base_PixelFlags_flag'])
