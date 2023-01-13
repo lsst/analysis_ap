@@ -27,6 +27,7 @@ __all__ = ["DbQuery", "ApdbSqliteQuery", "ApdbPostgresQuery"]
 import os
 import abc
 import contextlib
+import warnings
 
 import pandas as pd
 import sqlalchemy
@@ -102,15 +103,19 @@ class DbQuery(abc.ABC):
 
         self.diaSource_flags_exclude = flag_list
 
-    def _make_flag_exclusion_clause(self, flag_list, column_name='flags'):
-        """Create a SQL where clause that excludes sources with chosen flags.
+    def _make_flag_exclusion_query(self, query, table, flag_list, column_name='flags'):
+        """Return an SQL where query that excludes sources with chosen flags.
 
         Parameters
         ----------
         flag_list : `list` [`str`]
             Flag names to exclude.
+        query : `sqlalchemy.sql.Query`
+            Query to include the where statement in.
+        table : `sqlalchemy.schema.Table`
+            Table containing the column to be queried.
         column_name : `str`, optional
-            Name of flag column.
+            Name of flag column to query.
 
         Returns
         -------
@@ -118,12 +123,12 @@ class DbQuery(abc.ABC):
             Clause to include in the SQL where statement.
         """
 
-        bitmask = self._unpacker.makeFlagBitMask(flag_list, columnName=column_name)
+        bitmask = int(self._unpacker.makeFlagBitMask(flag_list, columnName=column_name))
 
         if bitmask == 0:
             warnings.warn(f"Flag bitmask is zero. Supplied flags: {flag_list}", RuntimeWarning)
 
-        return f"(({column_name} & {bitmask}) = 0)"
+        return query.where(table.columns[column_name].op("&")(bitmask) == 0)
 
     def load_sources_for_object(self, dia_object_id, exclude_flagged=False, limit=100000):
         """Load diaSources for a single diaObject.
@@ -147,7 +152,7 @@ class DbQuery(abc.ABC):
         table = self._tables["DiaSource"]
         query = table.select().where(table.columns["diaObjectId"] == dia_object_id)
         if exclude_flagged:
-            query = query.where(self._make_flag_exclusion_clause(self.diaSource_flags_exclude))
+            query = self._make_flag_exclusion_query(query, table, self.diaSource_flags_exclude)
         query = query.order_by(table.columns["ccdVisitId"], table.columns["diaSourceId"])
         with self.connection as connection:
             result = pd.read_sql_query(query, connection)
@@ -175,7 +180,7 @@ class DbQuery(abc.ABC):
         table = self._tables["DiaSource"]
         query = table.select()
         if exclude_flagged:
-            query = query.where(self._make_flag_exclusion_clause(self.diaSource_flags_exclude))
+            query = self._make_flag_exclusion_query(query, table, self.diaSource_flags_exclude)
         query = query.order_by(table.columns["ccdVisitId"], table.columns["diaSourceId"])
         if limit is not None:
             query = query.limit(limit)
