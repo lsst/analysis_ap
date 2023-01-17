@@ -19,7 +19,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-__all__ = ["makeSimbadLink"]
+__all__ = ["make_simbad_link"]
 
 from IPython.display import display, Markdown
 import astropy.coordinates as coord
@@ -27,44 +27,45 @@ from astroquery.simbad import Simbad
 import astropy.units as u
 
 
-def makeSimbadLink(source, arcsec_radius=3.0, make_table=False):
-    """Search Simbad for associated sources within a 3 arcsecond region
-        Maximum search radius should not be greater than 5 arcseconds.
+def make_simbad_link(ra, dec, radius_arcsec=3.0):
+    """Search Simbad for associated sources within a 3 arcsecond region.
 
     Parameters
     ----------
-    source : 'pandas.core.series.Series'
-        Source pandas dataframe that include the ra and dec of the source.
+    ra : 'float'
+        Ra from source.
 
-    arcsec_radius : 'float'
+    dec : 'float'
+        Dec from source.
+
+    radius_arcsec : 'float'
         Search radius submitted to Simbad in arcseconds.
         Default radius is 3 arcseconds.
 
-        Returns
+    Returns
     -------
     results_table : `astropy.table.table.Table`
-        A table of Simbad search results from astro_query.
+        A table of Simbad search results.
     """
-    ra = source["ra"]
-    dec = source["decl"]
+
     search_results = f"http://simbad.cds.unistra.fr/simbad/sim-coo?Coord={ra}+{dec}" \
                      f"&CooFrame=FK5&CooEpoch=2000&CooEqui=2000&CooDefinedFrames=none&Radius=" \
-                     f"{arcsec_radius}&Radius.unit=arcsec&submit=submit+query&CoordList="
+                     f"{radius_arcsec}&Radius.unit=arcsec&submit=submit+query&CoordList="
     display(Markdown(f"[Link to Simbad search]({search_results})"))
 
-    try:
-        source_coords = coord.SkyCoord(ra, dec, frame="icrs", unit=(u.deg, u.deg))
-        results_table = Simbad.query_region(
-            source_coords, radius=f"0d0m{arcsec_radius}s"
-        )
-        print(results_table)
-        if results_table is not None:
-            results_table["MAIN_ID", "RA", "DEC"].pprint_all()
+    source_coords = coord.SkyCoord(ra, dec, frame="icrs", unit=(u.deg, u.deg))
+    customSimbad = Simbad()
+    customSimbad.TIMEOUT = 600
+    customSimbad.add_votable_fields("otype(V)")
+    results_table = customSimbad.query_region(
+        source_coords, radius=radius_arcsec*u.arcsecond
+    )
 
-            return results_table
+    if results_table is not None:
 
-        else:
-            raise ValueError
+        return results_table
 
-    except ValueError:
-        print(f"No matched sources within {arcsec_radius} arcseconds.")
+    else:
+        print(f"No matched sources within {radius_arcsec} arcseconds.")
+
+        return None
