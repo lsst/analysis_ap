@@ -322,7 +322,7 @@ class ApdbPostgresQuery(DbQuery):
         super().__init__(butler=butler, instrument=instrument, **kwargs)
         self._connection_string = f"postgresql://{url}"
         self._namespace = namespace
-        self._engine = sqlalchemy.create_engine(self._connection_string)
+        self._engine = sqlalchemy.create_engine(self._connection_string, poolclass=sqlalchemy.pool.NullPool)
 
         with self.connection as connection:
             metadata = sqlalchemy.MetaData(schema=namespace)
