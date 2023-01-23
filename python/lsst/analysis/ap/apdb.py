@@ -248,6 +248,9 @@ class DbQuery(abc.ABC):
         diaSource : `pandas.core.frame.DataFrame`
             Pandas dataframe with DIA Sources from an APDB; modified in-place.
         """
+        # do nothing for an empty series
+        if len(diaSource) == 0:
+            return
         instrumentDataId = self._butler.registry.expandDataId(instrument=self._instrument)
         packer = self._butler.registry.dimensions.makePacker("visit_detector", instrumentDataId)
         dataId = packer.unpack(diaSource.ccdVisitId)

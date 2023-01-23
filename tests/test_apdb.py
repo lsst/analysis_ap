@@ -23,6 +23,8 @@ import os
 import unittest
 import tempfile
 
+import pandas as pd
+
 import lsst.utils.tests
 from lsst.analysis.ap.apdb import ApdbSqliteQuery
 
@@ -124,6 +126,12 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         query = self.apdb._make_flag_exclusion_query(query, table, self.apdb.diaSource_flags_exclude)
         self.assertEqual(str(query.whereclause.compile(compile_kwargs={"literal_binds": True})),
                          '("DiaSource".flags & 1) = 0')
+
+    def test_fill_from_ccdVisitId(self):
+        # an empty series should be unchanged
+        empty = pd.Series()
+        self.apdb._fill_from_ccdVisitId(empty)
+        self.assertTrue(empty.equals(pd.Series()))
 
 
 class TestMemory(lsst.utils.tests.MemoryTestCase):
