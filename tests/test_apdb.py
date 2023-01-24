@@ -49,7 +49,7 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         self.path.cleanup()
 
     def test_load_sources(self):
-        result = self.apdb.load_sources()
+        result = self.apdb.load_sources(limit=None)
         self.assertEqual(len(result), 15)
         # spot check a few fields
         self.assertEqual(result['diaSourceId'][0], 224948952930189335)
@@ -83,7 +83,7 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         self.assertEqual(len(result), 0)
 
     def test_load_objects(self):
-        result = self.apdb.load_objects()
+        result = self.apdb.load_objects(limit=None)
         self.assertEqual(len(result), 15)
         # spot check a few fields
         self.assertNotIn("diaSourceId", result)
@@ -94,7 +94,7 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         self.assertEqual(len(result), 2)
 
     def test_load_forced_sources(self):
-        result = self.apdb.load_forced_sources()
+        result = self.apdb.load_forced_sources(limit=None)
         self.assertEqual(len(result), 15)
         # spot check a few fields
         self.assertEqual(result['diaObjectId'][0], 224948952930189335)
