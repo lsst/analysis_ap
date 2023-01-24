@@ -27,11 +27,10 @@ __all__ = ["DbQuery", "ApdbSqliteQuery", "ApdbPostgresQuery"]
 import os
 import abc
 import contextlib
-import sqlite3
 import warnings
 
 import pandas as pd
-import psycopg
+import sqlalchemy
 
 import lsst.utils
 from lsst.ap.association import UnpackApdbFlags
@@ -76,9 +75,12 @@ class DbQuery(abc.ABC):
     def connection(self):
         """Context manager for database connections.
 
-        Must yield an sql Connection object like ``psycopg.Connection``;
-        whether the connection is closed after the context manager is closed
-        is implementation dependent.
+        Yields
+        ------
+        connection : `sqlalchemy.engine.Connection`
+            Connection to the database that will be queried. Whether the
+            connection is closed after the context manager is closed is
+            implementation dependent.
         """
         pass
 
@@ -101,15 +103,19 @@ class DbQuery(abc.ABC):
 
         self.diaSource_flags_exclude = flag_list
 
-    def _make_flag_exclusion_clause(self, flag_list, column_name='flags'):
-        """Create a SQL where clause that excludes sources with chosen flags.
+    def _make_flag_exclusion_query(self, query, table, flag_list, column_name='flags'):
+        """Return an SQL where query that excludes sources with chosen flags.
 
         Parameters
         ----------
         flag_list : `list` [`str`]
             Flag names to exclude.
+        query : `sqlalchemy.sql.Query`
+            Query to include the where statement in.
+        table : `sqlalchemy.schema.Table`
+            Table containing the column to be queried.
         column_name : `str`, optional
-            Name of flag column.
+            Name of flag column to query.
 
         Returns
         -------
@@ -117,12 +123,12 @@ class DbQuery(abc.ABC):
             Clause to include in the SQL where statement.
         """
 
-        bitmask = self._unpacker.makeFlagBitMask(flag_list, columnName=column_name)
+        bitmask = int(self._unpacker.makeFlagBitMask(flag_list, columnName=column_name))
 
         if bitmask == 0:
             warnings.warn(f"Flag bitmask is zero. Supplied flags: {flag_list}", RuntimeWarning)
 
-        return f"(({column_name} & {bitmask}) = 0)"
+        return query.where(table.columns[column_name].op("&")(bitmask) == 0)
 
     def load_sources_for_object(self, dia_object_id, exclude_flagged=False, limit=100000):
         """Load diaSources for a single diaObject.
@@ -143,19 +149,11 @@ class DbQuery(abc.ABC):
         data : `pandas.DataFrame`
             DiaSources for the specified diaObject.
         """
-
-        where_clauses = [f'"DiaSource"."diaObjectId" = {dia_object_id}']
-
+        table = self._tables["DiaSource"]
+        query = table.select().where(table.columns["diaObjectId"] == dia_object_id)
         if exclude_flagged:
-            where_clauses.append(self._make_flag_exclusion_clause(self.diaSource_flags_exclude))
-
-        where = "WHERE " + " and ".join(where_clauses) if len(where_clauses) else ""
-
-        order = 'ORDER BY "ccdVisitId", "diaSourceId"'
-        limit_str = f"LIMIT {limit}" if limit is not None else ""
-        query = ('SELECT * FROM "DiaSource"'
-                 f' {where} {order} {limit_str};')
-
+            query = self._make_flag_exclusion_query(query, table, self.diaSource_flags_exclude)
+        query = query.order_by(table.columns["ccdVisitId"], table.columns["diaSourceId"])
         with self.connection as connection:
             result = pd.read_sql_query(query, connection)
 
@@ -179,18 +177,13 @@ class DbQuery(abc.ABC):
         data : `pandas.DataFrame`
             All available diaSources.
         """
-
-        where_clauses = []
-
+        table = self._tables["DiaSource"]
+        query = table.select()
         if exclude_flagged:
-            where_clauses.append(self._make_flag_exclusion_clause(self.diaSource_flags_exclude))
-
-        where = "WHERE " + " and ".join(where_clauses) if len(where_clauses) else ""
-
-        order = 'ORDER BY "ccdVisitId", "diaSourceId"'
-        limit_str = f"LIMIT {limit}" if limit is not None else ""
-
-        query = f'SELECT * FROM "DiaSource" {where} {order} {limit_str};'
+            query = self._make_flag_exclusion_query(query, table, self.diaSource_flags_exclude)
+        query = query.order_by(table.columns["ccdVisitId"], table.columns["diaSourceId"])
+        if limit is not None:
+            query = query.limit(limit)
 
         with self.connection as connection:
             result = pd.read_sql_query(query, connection)
@@ -211,11 +204,15 @@ class DbQuery(abc.ABC):
         data : `pandas.DataFrame`
             All available diaObjects.
         """
-        order = 'ORDER BY "diaObjectId"'
-        limit_str = f"LIMIT {limit}" if limit is not None else ""
-        query = f'SELECT * FROM "DiaObject" {order} {limit_str};'
+        table = self._tables["DiaObject"]
+        query = table.select()
+        query = query.order_by(table.columns["diaObjectId"])
+        if limit is not None:
+            query = query.limit(limit)
+
         with self.connection as connection:
             result = pd.read_sql_query(query, connection)
+
         return result
 
     def load_forced_sources(self, limit=100000):
@@ -231,9 +228,12 @@ class DbQuery(abc.ABC):
         data : `pandas.DataFrame`
             All available diaForcedSources.
         """
-        order = 'ORDER BY "ccdVisitId", "diaSourceId"'
-        limit_str = f"LIMIT {limit}" if limit is not None else ""
-        query = f'SELECT * FROM "DiaForcedSource" {order} {limit_str};'
+        table = self._tables["DiaForcedSource"]
+        query = table.select()
+        query = query.order_by(table.columns["ccdVisitId"], table.columns["diaForcedSourceId"])
+        if limit is not None:
+            query = query.limit(limit)
+
         with self.connection as connection:
             result = pd.read_sql_query(query, connection)
         self._fill_from_ccdVisitId(result)
@@ -248,6 +248,9 @@ class DbQuery(abc.ABC):
         diaSource : `pandas.core.frame.DataFrame`
             Pandas dataframe with DIA Sources from an APDB; modified in-place.
         """
+        # do nothing for an empty series
+        if len(diaSource) == 0:
+            return
         instrumentDataId = self._butler.registry.expandDataId(instrument=self._instrument)
         packer = self._butler.registry.dimensions.makePacker("visit_detector", instrumentDataId)
         dataId = packer.unpack(diaSource.ccdVisitId)
@@ -279,12 +282,17 @@ class ApdbSqliteQuery(DbQuery):
 
     def __init__(self, filename, *, butler, instrument, **kwargs):
         super().__init__(butler=butler, instrument=instrument, **kwargs)
-        self._connection = sqlite3.connect(filename)
+        self._engine = sqlalchemy.create_engine(f"sqlite:///{filename}")
+
+        with self.connection as connection:
+            metadata = sqlalchemy.MetaData()
+            metadata.reflect(bind=connection)
+        self._tables = metadata.tables
 
     @property
     @contextlib.contextmanager
     def connection(self):
-        yield self._connection
+        yield self._engine.connect()
 
 
 class ApdbPostgresQuery(DbQuery):
@@ -314,17 +322,21 @@ class ApdbPostgresQuery(DbQuery):
         super().__init__(butler=butler, instrument=instrument, **kwargs)
         self._connection_string = f"postgresql://{url}"
         self._namespace = namespace
+        self._engine = sqlalchemy.create_engine(self._connection_string, poolclass=sqlalchemy.pool.NullPool)
+
+        with self.connection as connection:
+            metadata = sqlalchemy.MetaData(schema=namespace)
+            metadata.reflect(bind=connection)
+        # ensure tables don't have schema prepended
+        self._tables = {}
+        for table in metadata.tables.values():
+            self._tables[table.name] = table
 
     @property
     @contextlib.contextmanager
     def connection(self):
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", message="pandas only supports SQLAlchemy connectable")
-            _connection = psycopg.connect(self._connection_string)
-            cursor = _connection.cursor()
-            cursor.execute(psycopg.sql.SQL("SET search_path TO {}").format(
-                psycopg.sql.Identifier(self._namespace)))
-            try:
-                yield _connection
-            finally:
-                _connection.close()
+        try:
+            _connection = self._engine.connect()
+            yield _connection
+        finally:
+            _connection.close()

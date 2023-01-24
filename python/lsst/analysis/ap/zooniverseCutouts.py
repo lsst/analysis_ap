@@ -474,7 +474,7 @@ def _annotate_image(fig, source, flags):
         fig.text(0.87, 0.83, "SHAPE", color="red", fontweight="bold")
 
     # rb score
-    if np.isfinite(source['spuriousness']):
+    if source['spuriousness'] is not None and np.isfinite(source['spuriousness']):
         fig.text(0.73, 0.79, f"RB:{source['spuriousness']:.03f}",
                  color='#e41a1c' if source['spuriousness'] < 0.5 else '#4daf4a',
                  fontweight="bold")
@@ -685,10 +685,11 @@ def select_sources(apdb_query, limit):
     try:
         while True:
             with apdb_query.connection as connection:
-                sources = pd.read_sql_query(
-                    'select * FROM "DiaSource" ORDER BY "ccdVisitId", '
-                    f'"diaSourceId" LIMIT {limit} OFFSET {offset};',
-                    connection)
+                table = apdb_query._tables["DiaSource"]
+                query = table.select()
+                query = query.order_by(table.columns["ccdVisitId"], table.columns["diaSourceId"])
+                query = query.limit(limit).offset(offset)
+                sources = pd.read_sql_query(query, connection)
             if len(sources) == 0:
                 break
             apdb_query._fill_from_ccdVisitId(sources)
@@ -713,9 +714,7 @@ def len_sources(apdb_query):
         Number of diaSources in this APDB.
     """
     with apdb_query.connection as connection:
-        cursor = connection.cursor()
-        cursor.execute('select count(*) FROM "DiaSource";')
-        count = cursor.fetchone()[0]
+        count = connection.execute('select count(*) FROM "DiaSource";').scalar()
     return count
 
 
