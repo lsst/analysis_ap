@@ -474,7 +474,7 @@ def _annotate_image(fig, source, flags):
         fig.text(0.87, 0.83, "SHAPE", color="red", fontweight="bold")
 
     # rb score
-    if np.isfinite(source['spuriousness']):
+    if source['spuriousness'] is not None and np.isfinite(source['spuriousness']):
         fig.text(0.73, 0.79, f"RB:{source['spuriousness']:.03f}",
                  color='#e41a1c' if source['spuriousness'] < 0.5 else '#4daf4a',
                  fontweight="bold")
