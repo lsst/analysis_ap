@@ -245,7 +245,7 @@ class DbQuery(abc.ABC):
             All available diaObjects.
         """
         table = self._tables["DiaObject"]
-        query = table.select()
+        query = table.select().where(table.columns["validityStart"].isnot(None))
         query = query.order_by(table.columns["diaObjectId"])
         if limit is not None:
             query = query.limit(limit)
