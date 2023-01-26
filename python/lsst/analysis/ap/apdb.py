@@ -395,8 +395,8 @@ class ApdbPostgresQuery(DbQuery):
     @property
     @contextlib.contextmanager
     def connection(self):
+        _connection = self._engine.connect()
         try:
-            _connection = self._engine.connect()
             yield _connection
         finally:
             _connection.close()
