@@ -49,61 +49,80 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         self.path.cleanup()
 
     def test_load_sources(self):
-        sources = self.apdb.load_sources()
-        self.assertEqual(len(sources), 15)
+        result = self.apdb.load_sources(limit=None)
+        self.assertEqual(len(result), 15)
         # spot check a few fields
-        self.assertEqual(sources['diaSourceId'][0], 224948952930189335)
-        self.assertTrue(all(sources['ccdVisitId'] == 419000076))
-        self.assertEqual(sources['diaObjectId'][14], 224948952930189349)
-        self.assertEqual(sources['detector'][0], 76)
-        self.assertEqual(sources['visit'][0], 4190000)
+        self.assertEqual(result['diaSourceId'][0], 224948952930189335)
+        self.assertTrue(all(result['ccdVisitId'] == 419000076))
+        self.assertEqual(result['diaObjectId'][14], 224948952930189349)
+        self.assertEqual(result['detector'][0], 76)
+        self.assertEqual(result['visit'][0], 4190000)
 
         # check using a query limit
-        sources = self.apdb.load_sources(limit=2)
-        self.assertEqual(len(sources), 2)
+        result = self.apdb.load_sources(limit=2)
+        self.assertEqual(len(result), 2)
 
     def test_load_sources_exclude_flags(self):
-        sources = self.apdb.load_sources(exclude_flagged=True)
-        self.assertEqual(len(sources), 11)
+        result = self.apdb.load_sources(exclude_flagged=True)
+        self.assertEqual(len(result), 11)
 
     def test_load_sources_for_object(self):
-        sources = self.apdb.load_sources_for_object(224948952930189335)
+        result = self.apdb.load_sources_for_object(224948952930189335)
         # This test APDB has only one source per object.
-        self.assertEqual(len(sources), 1)
-        self.assertEqual(sources['diaSourceId'][0], 224948952930189335)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result['diaSourceId'][0], 224948952930189335)
 
     def test_load_sources_for_object_exclude_flags(self):
         # diaObjectId chosen from inspection to have flagged diaSources
-        sources = self.apdb.load_sources_for_object(224948952930189342)
-        self.assertEqual(len(sources), 1)
-        self.assertEqual(sources['diaSourceId'][0], 224948952930189342)
+        result = self.apdb.load_sources_for_object(224948952930189342)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result['diaSourceId'][0], 224948952930189342)
 
-        sources = self.apdb.load_sources_for_object(224948952930189342,
-                                                    exclude_flagged=True)
-        self.assertEqual(len(sources), 0)
+        result = self.apdb.load_sources_for_object(224948952930189342,
+                                                   exclude_flagged=True)
+        self.assertEqual(len(result), 0)
 
     def test_load_objects(self):
-        objects = self.apdb.load_objects()
-        self.assertEqual(len(objects), 15)
+        result = self.apdb.load_objects(limit=None)
+        self.assertEqual(len(result), 15)
         # spot check a few fields
-        self.assertNotIn("diaSourceId", objects)
-        self.assertEqual(objects['diaObjectId'][0], 224948952930189335)
-        self.assertIn("validityStart", objects.columns)
+        self.assertNotIn("diaSourceId", result)
+        self.assertEqual(result['diaObjectId'][0], 224948952930189335)
+        self.assertIn("validityStart", result.columns)
 
-        sources = self.apdb.load_objects(limit=2)
-        self.assertEqual(len(sources), 2)
+        result = self.apdb.load_objects(limit=2)
+        self.assertEqual(len(result), 2)
 
     def test_load_forced_sources(self):
-        sources = self.apdb.load_forced_sources()
-        self.assertEqual(len(sources), 15)
+        result = self.apdb.load_forced_sources(limit=None)
+        self.assertEqual(len(result), 15)
         # spot check a few fields
-        self.assertEqual(sources['diaObjectId'][0], 224948952930189335)
-        self.assertEqual(sources['diaForcedSourceId'][0], 224948952930189313)
-        self.assertEqual(sources['detector'][0], 76)
-        self.assertEqual(sources['visit'][0], 4190000)
+        self.assertEqual(result['diaObjectId'][0], 224948952930189335)
+        self.assertEqual(result['diaForcedSourceId'][0], 224948952930189313)
+        self.assertEqual(result['detector'][0], 76)
+        self.assertEqual(result['visit'][0], 4190000)
 
-        sources = self.apdb.load_forced_sources(limit=2)
-        self.assertEqual(len(sources), 2)
+        result = self.apdb.load_forced_sources(limit=2)
+        self.assertEqual(len(result), 2)
+
+    def test_load_source(self):
+        result = self.apdb.load_source(224948952930189341)
+        # spot check a few fields
+        self.assertEqual(result['diaSourceId'], 224948952930189341)
+        self.assertEqual(result['diaObjectId'], 224948952930189341)
+        self.assertEqual(result['flags'], 41943836)
+
+    def test_load_object(self):
+        result = self.apdb.load_object(224948952930189342)
+        # spot check a few fields
+        self.assertEqual(result['diaObjectId'], 224948952930189342)
+        self.assertFloatsAlmostEqual(result['ra'], 57.8279300010916, rtol=4e-16)
+
+    def test_load_forced_source(self):
+        result = self.apdb.load_forced_source(224948952930189321)
+        # spot check a few fields
+        self.assertEqual(result['diaForcedSourceId'], 224948952930189321)
+        self.assertEqual(result['diaObjectId'], 224948952930189343)
 
     def test_make_flag_exclusion_clause(self):
         # test clause generation with default flag list
