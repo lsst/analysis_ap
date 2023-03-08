@@ -55,6 +55,12 @@ class ZooniverseCutoutsConfig(pexConfig.Config):
         dtype=int,
         default=30,
     )
+    use_footprint = pexConfig.Field(
+        doc="Use source footprint to to define cutout region; "
+            "If set, ignore `size` and use the footprint bbox instead.",
+        dtype=bool,
+        default=False,
+    )
     url_root = pexConfig.Field(
         doc="URL that the resulting images will be served to Zooniverse from, for the manifest file. "
             "If not set, no manifest file will be written.",
@@ -249,15 +255,35 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
                     butler.get(f'{self.config.diff_image_type}_templateExp', dataId),
                     butler.get(f'{self.config.diff_image_type}_differenceExp', dataId))
 
+        @functools.lru_cache(maxsize=4)
+        def get_catalog(instrument, detector, visit):
+            dataId = {'instrument': instrument, 'detector': detector, 'visit': visit}
+            return butler.get(f'{self.config.diff_image_type}_diaSrc', dataId)
+
         try:
             center = lsst.geom.SpherePoint(source["ra"], source["decl"], lsst.geom.degrees)
             science, template, difference = get_exposures(source["instrument"],
                                                           source["detector"],
                                                           source["visit"])
+            if self.config.use_footprint:
+                catalog = get_catalog(source["instrument"],
+                                      source["detector"],
+                                      source["visit"])
+                # The input catalogs must be sorted.
+                if not catalog.isSorted():
+                    dataId = {'instrument': source["instrument"],
+                              'detector': source["detector"],
+                              'visit': source["visit"]}
+                    msg = f"{self.config.diff_image_type}_diaSrc catalog for {dataId} is not sorted!"
+                    raise RuntimeError(msg)
+                record = catalog.find(source['diaSourceId'])
+                footprint = record.getFootprint()
+
             scale = science.wcs.getPixelScale().asArcseconds()
             image = self.generate_image(science, template, difference, center, scale,
                                         source=source if self.config.add_metadata else None,
-                                        flags=flags if self.config.add_metadata else None)
+                                        flags=flags if self.config.add_metadata else None,
+                                        footprint=footprint if self.config.use_footprint else None)
             self.cutout_path.mkdir(source["diaSourceId"])
             with open(self.cutout_path(source["diaSourceId"]), "wb") as outfile:
                 outfile.write(image.getbuffer())
@@ -273,7 +299,8 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             traceback.print_exc()
             raise
 
-    def generate_image(self, science, template, difference, center, scale, source=None, flags=None):
+    def generate_image(self, science, template, difference, center, scale,
+                       source=None, flags=None, footprint=None):
         """Get a 3-part cutout image to save to disk, for a single source.
 
         Parameters
@@ -293,6 +320,9 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         flags : `str`, optional
             Unpacked bits from the ``flags`` field in ``source``.
             Required if ``source`` is not None.
+        footprint : `lsst.afw.detection.Footprint`, optional
+            Detected source footprint; if specified, extract a square
+            surrounding the footprint bbox, otherwise use ``config.size``.
 
         Returns
         -------
@@ -301,17 +331,29 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         """
         if (source is None) ^ (flags is None):
             raise RuntimeError("Must pass both `source` and `flags` together.")
-        size = lsst.geom.Extent2I(self.config.size, self.config.size)
-        return self._plot_cutout(
-            science.getCutout(center, size),
-            template.getCutout(center, size),
-            difference.getCutout(center, size),
-            scale,
-            source=source,
-            flags=flags
-        )
+        if not self.config.use_footprint:
+            extent = lsst.geom.Extent2I(self.config.size, self.config.size)
+            cutout_science = science.getCutout(center, extent)
+            cutout_template = template.getCutout(center, extent)
+            coutout_difference = difference.getCutout(center, extent)
+            size = self.config.size
+        else:
+            cutout_science = science.subset(footprint.getBBox())
+            cutout_template = template.subset(footprint.getBBox())
+            coutout_difference = difference.subset(footprint.getBBox())
+            extent = footprint.getBBox().getDimensions()
+            # Plot a square equal to the largest dimension.
+            size = extent.x if extent.x > extent.y else extent.y
 
-    def _plot_cutout(self, science, template, difference, scale, source=None, flags=None):
+        return self._plot_cutout(cutout_science,
+                                 cutout_template,
+                                 coutout_difference,
+                                 scale,
+                                 size,
+                                 source=source,
+                                 flags=flags)
+
+    def _plot_cutout(self, science, template, difference, scale, size, source=None, flags=None):
         """Plot the cutouts for a source in one image.
 
         Parameters
@@ -326,6 +368,8 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
             DiaSource record for this cutout, to add metadata to the image.
         scale : `float`
             Pixel scale in arcseconds.
+        size : `int`
+            x/y dimensions of of the images passed in, to set imshow extent.
         flags : `str`, optional
             Unpacked bits from the ``flags`` field in ``source``.
 
@@ -358,7 +402,7 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
                     stretch=aviz.AsinhStretch(a=0.1),
                 )
             ax.imshow(data, cmap=cm.bone, interpolation="none", norm=norm,
-                      extent=(0, self.config.size, 0, self.config.size), origin="lower", aspect="equal")
+                      extent=(0, size, 0, size), origin="lower", aspect="equal")
             x_line = 1
             y_line = 1
             ax.plot((x_line, x_line + 1.0/scale), (y_line, y_line), color="blue", lw=6)
