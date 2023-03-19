@@ -410,8 +410,8 @@ def _annotate_image(fig, source, flags):
     flags_centroid = ["slot_Centroid_flag"]
     flags_centroid_pos = ["slot_Centroid_pos_flag"]
     flags_centroid_neg = ["slot_Centroid_neg_flag"]
-    flags_shape = ["slot_Shape_flag", "slot_Shape_flag_unweightedBad", "slot_Shape_flag_unweighted",
-                   "slot_Shape_flag_shift", "slot_Shape_flag_maxIter", "slot_Shape_flag_psf"]
+    flags_shape = ["slot_Shape_flag", "slot_Shape_flag_no_pixels", "slot_Shape_flag_not_contained",
+                   "slot_Shape_flag_parent_source"]
 
     flag_color = "red"
     text_color = "grey"
