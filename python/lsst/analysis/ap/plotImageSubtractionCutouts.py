@@ -89,7 +89,8 @@ class PlotImageSubtractionCutoutsConfig(pexConfig.Config):
 
 
 class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
-    """Generate cutouts and a manifest for upload to a Zooniverse project.
+    """Generate template/science/difference image cutouts of DiaSources and an
+    optional manifest for upload to a Zooniverse project.
 
     Parameters
     ----------
@@ -112,8 +113,8 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         return kwargs
 
     def run(self, data, butler, njobs=0):
-        """Generate cutouts images and a manifest for upload to Zooniverse
-        from a collection of sources.
+        """Generate cutout images and a manifest for upload to Zooniverse
+        from a collection of DiaSources.
 
         Parameters
         ----------
