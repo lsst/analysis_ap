@@ -1,6 +1,6 @@
 #! /usr/bin/env python
 
-from lsst.analysis.ap.zooniverseCutouts import main
+from lsst.analysis.ap.plotImageSubtractionCutouts import main
 
 if __name__ == "__main__":
     main()

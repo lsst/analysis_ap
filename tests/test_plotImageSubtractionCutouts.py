@@ -35,7 +35,7 @@ from lsst.meas.algorithms import SourceDetectionTask
 import lsst.meas.base.tests
 import lsst.utils.tests
 
-from lsst.analysis.ap import zooniverseCutouts
+from lsst.analysis.ap import plotImageSubtractionCutouts
 
 # Sky center chosen to test metadata annotations (3-digit RA and negative Dec).
 skyCenter = lsst.geom.SpherePoint(245.0, -45.0, lsst.geom.degrees)
@@ -76,9 +76,9 @@ def make_mock_catalog(image):
     return detect.run(table, image).sources
 
 
-class TestZooniverseCutouts(lsst.utils.tests.TestCase):
-    """Test that ZooniverseCutoutsTask generates images and manifest files
-    correctly.
+class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
+    """Test that PlotImageSubtractionCutoutsTask generates images and manifest
+    files correctly.
     """
     def setUp(self):
         bbox = lsst.geom.Box2I(lsst.geom.Point2I(0, 0), lsst.geom.Point2I(100, 100))
@@ -109,7 +109,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
             im.show()
         """
         # output_path does nothing here, since we never write the file to disk.
-        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(output_path="")
+        cutouts = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(output_path="")
         cutout = cutouts.generate_image(self.science, self.template, self.difference, skyCenter, self.scale)
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
@@ -122,10 +122,10 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         """A different cutout size: the resulting cutout image is the same
         size but shows more pixels.
         """
-        config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
+        config = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask.ConfigClass()
         config.size = 100
         # output_path does nothing here, since we never write the file to disk.
-        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path="")
+        cutouts = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(config=config, output_path="")
         cutout = cutouts.generate_image(self.science, self.template, self.difference, skyCenter, self.scale)
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
@@ -141,10 +141,10 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         It's useful to have a person look at the output via:
             im.show()
         """
-        config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
+        config = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask.ConfigClass()
         config.add_metadata = True
         # output_path does nothing here, since we never write the file to disk.
-        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path="")
+        cutouts = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(config=config, output_path="")
         cutout = cutouts.generate_image(self.science,
                                         self.template,
                                         self.difference,
@@ -175,7 +175,7 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
             self.assertEqual((im.height, im.width), (343, 645))
 
     def test_generate_image_invalid_paramters(self):
-        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(output_path="")
+        cutouts = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(output_path="")
         with self.assertRaisesRegex(RuntimeError, "Must pass both"):
             cutouts.generate_image(self.science,
                                    self.template,
@@ -201,8 +201,9 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         butler.get.return_value = self.science
 
         with tempfile.TemporaryDirectory() as path:
-            config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
-            cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path=path)
+            config = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask.ConfigClass()
+            cutouts = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(config=config,
+                                                                                  output_path=path)
             result = cutouts.write_images(DATA, butler)
             self.assertEqual(result, list(DATA["diaSourceId"]))
             for file in ("images/506428274000260000/506428274000265570.png",
@@ -232,9 +233,10 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         butler.get.side_effect = mock_get
 
         with tempfile.TemporaryDirectory() as path:
-            config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
+            config = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask.ConfigClass()
             config.use_footprint = True
-            cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path=path)
+            cutouts = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(config=config,
+                                                                                  output_path=path)
             result = cutouts.write_images(DATA, butler)
             self.assertEqual(result, list(DATA["diaSourceId"]))
             for file in ("images/506428274000260000/506428274000265570.png",
@@ -251,10 +253,11 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
         butler.get.side_effect = LookupError(err)
 
         with tempfile.TemporaryDirectory() as path:
-            config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
-            cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path=path)
+            config = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask.ConfigClass()
+            cutouts = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(config=config,
+                                                                                  output_path=path)
 
-            with self.assertLogs("lsst.zooniverseCutouts", "ERROR") as cm:
+            with self.assertLogs("lsst.plotImageSubtractionCutouts", "ERROR") as cm:
                 cutouts.write_images(DATA, butler)
             self.assertIn(
                 "LookupError processing diaSourceId 506428274000265570: Dataset not found", cm.output[0]
@@ -266,10 +269,10 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
     def check_make_manifest(self, url_root, url_list):
         """Check that make_manifest returns an appropriate DataFrame."""
         data = [5, 10, 20]
-        config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
+        config = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask.ConfigClass()
         config.url_root = url_root
         # output_path does nothing here
-        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path="")
+        cutouts = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(config=config, output_path="")
         manifest = cutouts._make_manifest(data)
         self.assertEqual(manifest["metadata:diaSourceId"].to_list(), [5, 10, 20])
         self.assertEqual(manifest["location:1"].to_list(), url_list)
@@ -296,15 +299,16 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
     def test_pickle(self):
         """Test that the task is pickleable (necessary for multiprocessing).
         """
-        config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
+        config = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask.ConfigClass()
         config.size = 63
-        cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path="something")
+        cutouts = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(config=config,
+                                                                              output_path="something")
         other = pickle.loads(pickle.dumps(cutouts))
         self.assertEqual(cutouts.config.size, other.config.size)
         self.assertEqual(cutouts._output_path, other._output_path)
 
 
-class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
+class TestPlotImageSubtractionCutoutsMain(lsst.utils.tests.TestCase):
     """Test the commandline interface main() function via mocks."""
     def setUp(self):
         datadir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/")
@@ -312,7 +316,7 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
         self.repo = "/not/a/real/butler"
         self.collection = "mockRun"
         self.outputPath = "/an/output/path"
-        self.configFile = os.path.join(datadir, "zooniverseCutoutsConfig.py")
+        self.configFile = os.path.join(datadir, "plotImageSubtractionCutoutsConfig.py")
         self.instrument = "FakeInstrument"
 
         def mock_unpacker(_):
@@ -330,7 +334,7 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
     def test_main_args(self):
         """Test typical arguments to main()."""
         args = [
-            "zooniverseCutouts",
+            "plotImageSubtractionCutouts",
             f"--sqlitefile={self.sqlitefile}",
             f"--collections={self.collection}",
             f"-C={self.configFile}",
@@ -339,9 +343,9 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
             self.outputPath,
         ]
         with unittest.mock.patch.object(
-            zooniverseCutouts.ZooniverseCutoutsTask, "run", autospec=True
+            plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask, "run", autospec=True
         ) as run, unittest.mock.patch.object(sys, "argv", args):
-            zooniverseCutouts.main()
+            plotImageSubtractionCutouts.main()
             self.assertEqual(self._butler.call_args.args, (self.repo,))
             self.assertEqual(
                 self._butler.call_args.kwargs, {"collections": [self.collection]}
@@ -353,7 +357,7 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
     def test_main_args_no_collections(self):
         """Test with no collections argument."""
         args = [
-            "zooniverseCutouts",
+            "plotImageSubtractionCutouts",
             f"--sqlitefile={self.sqlitefile}",
             f"-C={self.configFile}",
             f"--instrument={self.instrument}",
@@ -361,9 +365,9 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
             self.outputPath,
         ]
         with unittest.mock.patch.object(
-            zooniverseCutouts.ZooniverseCutoutsTask, "run", autospec=True
+            plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask, "run", autospec=True
         ) as run, unittest.mock.patch.object(sys, "argv", args):
-            zooniverseCutouts.main()
+            plotImageSubtractionCutouts.main()
             self.assertEqual(self._butler.call_args.args, (self.repo,))
             self.assertEqual(self._butler.call_args.kwargs, {"collections": None})
             self.assertIsInstance(run.call_args.args[1], pd.DataFrame)
@@ -373,7 +377,7 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
         """Test passing a list of collections."""
         collections = ["mock1", "mock2", "mock3"]
         args = [
-            "zooniverseCutouts",
+            "plotImageSubtractionCutouts",
             f"--sqlitefile={self.sqlitefile}",
             f"--instrument={self.instrument}",
             self.repo,
@@ -383,9 +387,9 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
         ]
         args.extend(collections)
         with unittest.mock.patch.object(
-            zooniverseCutouts.ZooniverseCutoutsTask, "run", autospec=True
+            plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask, "run", autospec=True
         ) as run, unittest.mock.patch.object(sys, "argv", args):
-            zooniverseCutouts.main()
+            plotImageSubtractionCutouts.main()
             self.assertEqual(self._butler.call_args.args, (self.repo,))
             self.assertEqual(
                 self._butler.call_args.kwargs, {"collections": collections}
@@ -396,7 +400,7 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
     def test_main_args_limit_offset(self):
         """Test typical arguments to main()."""
         args = [
-            "zooniverseCutouts",
+            "plotImageSubtractionCutouts",
             f"--sqlitefile={self.sqlitefile}",
             f"--collections={self.collection}",
             f"-C={self.configFile}",
@@ -407,12 +411,16 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
             self.outputPath,
         ]
         with unittest.mock.patch.object(
-            zooniverseCutouts.ZooniverseCutoutsTask, "write_images", autospec=True,
+            plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask,
+            "write_images",
+            autospec=True,
             return_value=[5]
         ) as write_images, unittest.mock.patch.object(
-            zooniverseCutouts.ZooniverseCutoutsTask, "write_manifest", autospec=True
+            plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask,
+            "write_manifest",
+            autospec=True
         ) as write_manifest, unittest.mock.patch.object(sys, "argv", args):
-            zooniverseCutouts.main()
+            plotImageSubtractionCutouts.main()
             self.assertEqual(self._butler.call_args.args, (self.repo,))
             self.assertEqual(
                 self._butler.call_args.kwargs, {"collections": [self.collection]}
@@ -428,7 +436,7 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
         """Test running with multiprocessing.
         """
         args = [
-            "zooniverseCutouts",
+            "plotImageSubtractionCutouts",
             f"--sqlitefile={self.sqlitefile}",
             f"--collections={self.collection}",
             "-j2",
@@ -438,9 +446,9 @@ class TestZooniverseCutoutsMain(lsst.utils.tests.TestCase):
             self.outputPath,
         ]
         with unittest.mock.patch.object(
-            zooniverseCutouts.ZooniverseCutoutsTask, "run", autospec=True
+            plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask, "run", autospec=True
         ) as run, unittest.mock.patch.object(sys, "argv", args):
-            zooniverseCutouts.main()
+            plotImageSubtractionCutouts.main()
             self.assertEqual(self._butler.call_args.args, (self.repo,))
             self.assertEqual(self._butler.call_args.kwargs, {"collections": [self.collection]})
             # NOTE: can't easily test the `data` arg to run, as select_sources
@@ -452,7 +460,7 @@ class TestCutoutPath(lsst.utils.tests.TestCase):
     def test_normal_path(self):
         """Can the path manager handles non-chunked paths?
         """
-        manager = zooniverseCutouts.CutoutPath("some/root/path")
+        manager = plotImageSubtractionCutouts.CutoutPath("some/root/path")
         path = manager(id=12345678)
         self.assertEqual(path, "some/root/path/images/12345678.png")
 
@@ -460,7 +468,7 @@ class TestCutoutPath(lsst.utils.tests.TestCase):
         """Can the path manager handle ids chunked into 10,000 file
         directories?
         """
-        manager = zooniverseCutouts.CutoutPath("some/root/path", chunk_size=10000)
+        manager = plotImageSubtractionCutouts.CutoutPath("some/root/path", chunk_size=10000)
         path = manager(id=12345678)
         self.assertEqual(path, "some/root/path/images/12340000/12345678.png")
 
@@ -468,14 +476,14 @@ class TestCutoutPath(lsst.utils.tests.TestCase):
         """Test valid and invalid values for the chunk_size parameter.
         """
         with self.assertRaisesRegex(RuntimeError, "chunk_size must be a power of 10"):
-            zooniverseCutouts.CutoutPath("some/root/path", chunk_size=123)
+            plotImageSubtractionCutouts.CutoutPath("some/root/path", chunk_size=123)
 
         with self.assertRaisesRegex(RuntimeError, "chunk_size must be a power of 10"):
-            zooniverseCutouts.CutoutPath("some/root/path", chunk_size=12300)
+            plotImageSubtractionCutouts.CutoutPath("some/root/path", chunk_size=12300)
 
         # should not raise
-        zooniverseCutouts.CutoutPath("some/root/path", chunk_size=1000)
-        zooniverseCutouts.CutoutPath("some/root/path", chunk_size=1000000)
+        plotImageSubtractionCutouts.CutoutPath("some/root/path", chunk_size=1000)
+        plotImageSubtractionCutouts.CutoutPath("some/root/path", chunk_size=1000000)
 
 
 class TestMemory(lsst.utils.tests.MemoryTestCase):

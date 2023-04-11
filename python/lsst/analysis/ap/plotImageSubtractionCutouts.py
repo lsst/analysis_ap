@@ -23,7 +23,7 @@
 to just to view as images.
 """
 
-__all__ = ["ZooniverseCutoutsConfig", "ZooniverseCutoutsTask", "CutoutPath"]
+__all__ = ["PlotImageSubtractionCutoutsConfig", "PlotImageSubtractionCutoutsTask", "CutoutPath"]
 
 import argparse
 import functools
@@ -49,7 +49,7 @@ import lsst.utils
 from . import apdb
 
 
-class ZooniverseCutoutsConfig(pexConfig.Config):
+class PlotImageSubtractionCutoutsConfig(pexConfig.Config):
     size = pexConfig.Field(
         doc="Width of cutout to extract for image from science, template, and difference exposures.",
         dtype=int,
@@ -88,7 +88,7 @@ class ZooniverseCutoutsConfig(pexConfig.Config):
     )
 
 
-class ZooniverseCutoutsTask(lsst.pipe.base.Task):
+class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
     """Generate cutouts and a manifest for upload to a Zooniverse project.
 
     Parameters
@@ -97,8 +97,8 @@ class ZooniverseCutoutsTask(lsst.pipe.base.Task):
         The path to write the output to; manifest goes here, while the
         images themselves go into ``output_path/images/``.
     """
-    ConfigClass = ZooniverseCutoutsConfig
-    _DefaultName = "zooniverseCutouts"
+    ConfigClass = PlotImageSubtractionCutoutsConfig
+    _DefaultName = "plotImageSubtractionCutouts"
 
     def __init__(self, *, output_path, **kwargs):
         super().__init__(**kwargs)
@@ -590,12 +590,13 @@ class CutoutPath:
 
 
 def build_argparser():
-    """Construct an argument parser for the ``zooniverseCutouts`` script.
+    """Construct an argument parser for the ``plotImageSubtractionCutouts``
+    script.
 
     Returns
     -------
     argparser : `argparse.ArgumentParser`
-        The argument parser that defines the ``zooniverseCutouts``
+        The argument parser that defines the ``plotImageSubtractionCutouts``
         command-line interface.
     """
     parser = argparse.ArgumentParser(
@@ -654,7 +655,7 @@ def build_argparser():
     parser.add_argument(
         "-C",
         "--configFile",
-        help="File containing the ZooniverseCutoutsConfig to load.",
+        help="File containing the PlotImageSubtractionCutoutsConfig to load.",
     )
     parser.add_argument(
         "--collections",
@@ -763,7 +764,7 @@ def len_sources(apdb_query):
 
 
 def run_cutouts(args):
-    """Run ZooniverseCutoutsTask on the parsed commandline arguments.
+    """Run PlotImageSubtractionCutoutsTask on the parsed commandline arguments.
 
     Parameters
     ----------
@@ -783,11 +784,11 @@ def run_cutouts(args):
                                  namespace=args.namespace)
     data = select_sources(apdb_query, args.limit)
 
-    config = ZooniverseCutoutsConfig()
+    config = PlotImageSubtractionCutoutsConfig()
     if args.configFile is not None:
         config.load(os.path.expanduser(args.configFile))
     config.freeze()
-    cutouts = ZooniverseCutoutsTask(config=config, output_path=args.outputPath)
+    cutouts = PlotImageSubtractionCutoutsTask(config=config, output_path=args.outputPath)
 
     getter = select_sources(apdb_query, args.limit)
     # Process just one block of length "limit", or all sources in the database?
