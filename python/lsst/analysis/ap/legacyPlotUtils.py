@@ -905,25 +905,3 @@ def plotCutout(scienceCutout, differenceCutout, templateCutout, output=None):
     if output is not None:
         plt.savefig(output, bbox_inches="tight")
         plt.close()
-
-
-def setObjectFilter(objTable):
-    """Define a subset of objects to plot, i.e., make some kind of quality cut.
-
-    The definition of objFilter is presently hard-wired here.
-
-    Parameters
-    ----------
-    objTable : `pandas.DataFrame`
-        DIA Object Table.
-
-    Returns
-    -------
-    objFilter : `pandas.Series` of `bool`
-        Filter applied to create a subset (e.g., quality cut) from objTable.
-    """
-    objFilter = ((objTable['nDiaSources'] > 14) & (objTable['flags'] == 0))
-    numTotal = len(objTable['diaObjectId'])
-    numFilter = len(objTable.loc[objFilter, 'diaObjectId'])
-    print('There are {0} total DIAObjects and {1} filtered DIAObjects.'.format(numTotal, numFilter))
-    return objFilter
