@@ -29,6 +29,7 @@ import lsst.daf.butler as dafButler
 __all__ = ("getPatchConstituents", "plotTractOutline", "mosaicCoadd")
 
 
+# TODO: we will consult with middleware on whether this is still necessary.
 def getPatchConstituents(repo, band='g', printConstituents=False, verbose=False,
                          tractIndex=0, instrument='DECam', collections=[],
                          skymapName='', coaddName='deepCoadd'):
@@ -102,6 +103,7 @@ def getPatchConstituents(repo, band='g', printConstituents=False, verbose=False,
     return dataPatchList, constituentList, constituentCountList
 
 
+# TODO: This is generic, and if it doesn't live elsewhere should move up.
 def bboxToRaDec(bbox, wcs):
     """Get the corners of a BBox and convert them to lists of RA and Dec.
 
@@ -123,6 +125,7 @@ def bboxToRaDec(bbox, wcs):
     return ra, dec
 
 
+# TODO: this is generic and probably can be gotten directly from the butler now?
 def getRaDecMinMaxPatchList(patchList, tractInfo, pad=0.0, nDecimals=4, raMin=360.0, raMax=0.0,
                             decMin=90.0, decMax=-90.0):
     """Find the max and min RA and DEC (deg) boundaries
@@ -162,7 +165,7 @@ def getRaDecMinMaxPatchList(patchList, tractInfo, pad=0.0, nDecimals=4, raMin=36
         decMax=decMax,
     )
 
-
+# TODO: can we replace this with something from analysis_tools?
 def plotTractOutline(tractInfo, patchList, axes=None, fontSize=10,
                      maxDegBeyondPatch=1.5):
     """Plot the the outline of the tract and patches highlighting
@@ -245,6 +248,7 @@ def plotTractOutline(tractInfo, patchList, axes=None, fontSize=10,
     axes.set_ylim(ylim)
 
 
+# TODO: This is generic and probably already available in analysis_tools.
 def mosaicCoadd(repo, patch_list, band='g', tractIndex=0, refPatchIndex=None,
                 sampling=100, norm=None, nImage=False, fig=None,
                 show_colorbar=True, filename=None, flipX=True, flipY=False,
