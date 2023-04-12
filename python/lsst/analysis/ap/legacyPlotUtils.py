@@ -81,20 +81,68 @@ def plotDiaObjectHistogram(objects, row_mask,
     return fig
 
 
-def plotDiaObjectsOnSky(rerunName, objTable, objFilter, hits):
+# TODO: confirm that this can be replace by HitsDiaPlot.
+def plotHitsDiaObjectsOnSky(title, objects, row_mask):
+    fig = plt.figure(facecolor='white', figsize=(10, 8))
+
+    dec_set1 = (objects['decl'] > -2) & row_mask
+    dec_set2 = (~dec_set1) & row_mask
+    plt.subplots_adjust(wspace=0.1, hspace=0)
+
+    # Panel 1: one HiTS field, on the right
+    ax1 = plt.subplot2grid((100, 100), (0, 55), rowspan=90, colspan=45)
+    plot1 = ax1.scatter(objects.loc[dec_set1, 'ra'], objects.loc[dec_set1, 'decl'],
+                        marker='.', lw=0, s=objects.loc[dec_set1, 'nDiaSources']*8,
+                        c=objects.loc[dec_set1, 'nDiaSources'], alpha=0.7,
+                        cmap='viridis', linewidth=0.5, edgecolor='k')
+    plt.xlabel('RA (deg)', size=16)
+    plt.ylabel('Dec (deg)', size=16)
+    ax1.spines['top'].set_visible(False)
+    ax1.spines['left'].set_visible(False)
+    ax1.yaxis.tick_right()
+    ax1.yaxis.set_label_position('right')
+    ax1.invert_xaxis()  # RA should increase to the left
+    loc = plticker.MultipleLocator(base=0.5)  # puts ticks at regular intervals
+    ax1.yaxis.set_major_locator(loc)
+    cb = fig.colorbar(plot1, orientation='horizontal', pad=0.3)
+    cb.set_label('Number of Sources per Object', size=16)
+    cb.set_clim(np.min(objects.loc[dec_set2, 'nDiaSources']),
+                np.max(objects.loc[dec_set2, 'nDiaSources']))
+    cb.solids.set_edgecolor("face")
+    cb.remove()  # don't show colorbar by this panel
+
+    # Panel 2: two (overlapping) HiTS fields, on the left
+    ax2 = plt.subplot2grid((100, 100), (0, 0), rowspan=90, colspan=50)
+    plot2 = ax2.scatter(objects.loc[dec_set2, 'ra'], objects.loc[dec_set2, 'decl'],
+                        marker='.', lw=0, s=objects.loc[dec_set2, 'nDiaSources']*8,
+                        c=objects.loc[dec_set2, 'nDiaSources'], alpha=0.7,
+                        cmap='viridis', linewidth=0.5, edgecolor='k')
+    plt.xlabel('RA (deg)', size=16)
+    plt.ylabel('Dec (deg)', size=16)
+    plt.title(title, size=16)
+    ax2.spines['top'].set_visible(False)
+    ax2.spines['right'].set_visible(False)
+    ax2.invert_xaxis()
+    cax = plt.subplot2grid((100, 100), (60, 55), rowspan=5, colspan=45)
+    cb2 = fig.colorbar(plot2, cax=cax, orientation='horizontal', pad=0.1)
+    cb2.set_label('Number of Sources per Object', size=16)
+    cb2.set_clim(np.min(objects.loc[dec_set2, 'nDiaSources']),
+                 np.max(objects.loc[dec_set2, 'nDiaSources']))
+    cb2.solids.set_edgecolor("face")
+
+
+# TODO: Confirm that this can be replaced by the version in analysis_tools.
+def plotDiaObjectsOnSky(title, objects, row_mask):
     """Create a plot of filtered DIAObjects on the sky.
 
     Parameters
     ----------
-    rerunName : `str`
-        Name of the directory at the end of the repo path.
-    objTable : `pandas.DataFrame`
+    title : `str`
+        Title to give to the plots.
+    objects : `pandas.DataFrame`
         DIA Object Table.
-    objFilter : `pandas.Series` of `bool`
-        Filter applied to create a subset (e.g., quality cut) from objTable.
-    hits : `boolean`
-        True for two panels with custom axes for the hits2015 dataset
-        False for a single plot with automatic axis limits
+    row_mask : `pandas.Series` of `bool`
+        Filter applied to create a subset (e.g., quality cut) from objects.
 
     Returns
     -------
@@ -104,70 +152,23 @@ def plotDiaObjectsOnSky(rerunName, objTable, objFilter, hits):
     """
     fig = plt.figure(facecolor='white', figsize=(10, 8))
 
-    if hits:  # two subplots
-        dec_set1 = (objTable['dec'] > -2) & objFilter
-        dec_set2 = (~dec_set1) & objFilter
-        plt.subplots_adjust(wspace=0.1, hspace=0)
-
-        # Panel 1: one HiTS field, on the right
-        ax1 = plt.subplot2grid((100, 100), (0, 55), rowspan=90, colspan=45)
-        plot1 = ax1.scatter(objTable.loc[dec_set1, 'ra'], objTable.loc[dec_set1, 'dec'],
-                            marker='.', lw=0, s=objTable.loc[dec_set1, 'nDiaSources']*8,
-                            c=objTable.loc[dec_set1, 'nDiaSources'], alpha=0.7,
-                            cmap='viridis', linewidth=0.5, edgecolor='k')
-        plt.xlabel('RA (deg)', size=16)
-        plt.ylabel('Dec (deg)', size=16)
-        ax1.spines['top'].set_visible(False)
-        ax1.spines['left'].set_visible(False)
-        ax1.yaxis.tick_right()
-        ax1.yaxis.set_label_position('right')
-        ax1.invert_xaxis()  # RA should increase to the left
-        loc = plticker.MultipleLocator(base=0.5)  # puts ticks at regular intervals
-        ax1.yaxis.set_major_locator(loc)
-        cb = fig.colorbar(plot1, orientation='horizontal', pad=0.3)
-        cb.set_label('Number of Sources per Object', size=16)
-        cb.set_clim(np.min(objTable.loc[dec_set2, 'nDiaSources']),
-                    np.max(objTable.loc[dec_set2, 'nDiaSources']))
-        cb.solids.set_edgecolor("face")
-        cb.remove()  # don't show colorbar by this panel
-
-        # Panel 2: two (overlapping) HiTS fields, on the left
-        ax2 = plt.subplot2grid((100, 100), (0, 0), rowspan=90, colspan=50)
-        plot2 = ax2.scatter(objTable.loc[dec_set2, 'ra'], objTable.loc[dec_set2, 'dec'],
-                            marker='.', lw=0, s=objTable.loc[dec_set2, 'nDiaSources']*8,
-                            c=objTable.loc[dec_set2, 'nDiaSources'], alpha=0.7,
-                            cmap='viridis', linewidth=0.5, edgecolor='k')
-        plt.xlabel('RA (deg)', size=16)
-        plt.ylabel('Dec (deg)', size=16)
-        plt.title(rerunName, size=16)
-        ax2.spines['top'].set_visible(False)
-        ax2.spines['right'].set_visible(False)
-        ax2.invert_xaxis()
-        cax = plt.subplot2grid((100, 100), (60, 55), rowspan=5, colspan=45)
-        cb2 = fig.colorbar(plot2, cax=cax, orientation='horizontal', pad=0.1)
-        cb2.set_label('Number of Sources per Object', size=16)
-        cb2.set_clim(np.min(objTable.loc[dec_set2, 'nDiaSources']),
-                     np.max(objTable.loc[dec_set2, 'nDiaSources']))
-        cb2.solids.set_edgecolor("face")
-
-    else:  # one main plot
-        ax = fig.add_subplot(111)
-        plot = ax.scatter(objTable.loc[objFilter, 'ra'],
-                          objTable.loc[objFilter, 'dec'], marker='.', lw=0,
-                          s=objTable.loc[objFilter, 'nDiaSources']*8,
-                          c=objTable.loc[objFilter, 'nDiaSources'],
-                          alpha=0.7, cmap='viridis', linewidth=0.5, edgecolor='k')
-        plt.xlabel('RA (deg)', size=16)
-        plt.ylabel('Dec (deg)', size=16)
-        plt.title(rerunName, size=16)
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.invert_xaxis()  # RA should increase to the left
-        cb = fig.colorbar(plot, orientation='horizontal')
-        cb.set_label('Number of Sources per Object', size=16)
-        cb.set_clim(np.min(objTable.loc[objFilter, 'nDiaSources']),
-                    np.max(objTable.loc[objFilter, 'nDiaSources']))
-        cb.solids.set_edgecolor("face")
+    ax = fig.add_subplot(111)
+    plot = ax.scatter(objects.loc[row_mask, 'ra'],
+                      objects.loc[row_mask, 'decl'], marker='.', lw=0,
+                      s=objects.loc[row_mask, 'nDiaSources']*8,
+                      c=objects.loc[row_mask, 'nDiaSources'],
+                      alpha=0.7, cmap='viridis', linewidth=0.5, edgecolor='k')
+    plt.xlabel('RA (deg)', size=16)
+    plt.ylabel('Dec (deg)', size=16)
+    plt.title(title, size=16)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.invert_xaxis()  # RA should increase to the left
+    cb = fig.colorbar(plot, orientation='horizontal')
+    cb.set_label('Number of Sources per Object', size=16)
+    cb.set_clim(np.min(objects.loc[row_mask, 'nDiaSources']),
+                np.max(objects.loc[row_mask, 'nDiaSources']))
+    cb.solids.set_edgecolor("face")
     return fig
 
 # TODO: This is generic (it even says so in the docstring!); does something
