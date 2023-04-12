@@ -40,18 +40,18 @@ from .legacyApdbUtils import loadExposures
 
 
 # TODO: Is this already in analysis_tools?
+def plotDiaObjectHistogram(objects, row_mask,
                            label1='All Objects',
                            label2='Filtered Objects',
                            title=''):
-    """Create a histogram showing how many DIA Sources
-    comprise the DIA Objects.
+    """Create a histogram showing how many DIA Sources comprise the DiaObjects.
 
     Parameters
     ----------
-    objTable : `pandas.DataFrame`
-        DIA Object Table.
-    objFiltered : `pandas.core.frame.DataFrame`
-        DIA Object Table that is a filtered subset of objTable.
+    objects : `pandas.DataFrame`
+        DiaObject Table.
+    row_mask : `array` [`bool`]
+        Mask array for objects to plot filtered objects.
     label1 : `str`
         Legend label for the first DIA Object Table.
     label2 : `str`
@@ -69,11 +69,11 @@ from .legacyApdbUtils import loadExposures
     plt.ylabel('Object count', size=16)
     plt.ylim(0.7, 1e5)
     plt.yscale('log')
-    binMax = np.max(objTable['nDiaSources'].values)
-    plt.hist(objTable['nDiaSources'].values, bins=np.arange(0, binMax),
-             color='#2979C1', label=label1)
-    plt.hist(objFiltered['nDiaSources'].values, bins=np.arange(0, binMax),
-             color='#Bee7F5', label=label2)
+    binMax = np.max(objects['nDiaSources'].values)
+    plt.hist(objects['nDiaSources'].values, bins=np.arange(0, binMax),
+             color='#2979c1', label=label1)
+    plt.hist(objects.loc[row_mask, 'nDiaSources'].values, bins=np.arange(0, binMax),
+             color='#bee7F5', label=label2)
     plt.legend(frameon=False, fontsize=16)
     plt.gca().spines['top'].set_visible(False)
     plt.gca().spines['right'].set_visible(False)
@@ -626,12 +626,11 @@ def plotDiaSourcesInFocalPlane(repo, sourceTable, gridsize=(400, 400), title='',
 
 
 # TODO: useful, but memory concerns for LSST-scale output.
+def plotDiaSourcesOnSkyGrid(sourceTable, title=None, color='C0', size=0.1):
     """Make a multi-panel plot of DIA Sources for each visit on the sky.
 
     Parameters
     ----------
-    repo : `str`
-        Repository corresponding to the output of an ap_pipe run.
     sourceTable : `pandas.core.frame.DataFrame`
         Pandas dataframe with DIA Sources from an APDB.
     title : `str`
