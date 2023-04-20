@@ -31,6 +31,7 @@ import PIL
 from lsst.ap.association import UnpackApdbFlags
 import lsst.afw.table
 import lsst.geom
+from lsst.meas.algorithms import SourceDetectionTask
 import lsst.meas.base.tests
 import lsst.utils.tests
 
@@ -64,6 +65,15 @@ DATA = pd.DataFrame(
         "spuriousness": [0, 1.0],
     }
 )
+
+
+def make_mock_catalog(image):
+    """Make a simple SourceCatalog from the image, containing Footprints.
+    """
+    schema = lsst.afw.table.SourceTable.makeMinimalSchema()
+    table = lsst.afw.table.SourceTable.make(schema)
+    detect = SourceDetectionTask()
+    return detect.run(table, image).sources
 
 
 class TestZooniverseCutouts(lsst.utils.tests.TestCase):
@@ -192,6 +202,38 @@ class TestZooniverseCutouts(lsst.utils.tests.TestCase):
 
         with tempfile.TemporaryDirectory() as path:
             config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
+            cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path=path)
+            result = cutouts.write_images(DATA, butler)
+            self.assertEqual(result, list(DATA["diaSourceId"]))
+            for file in ("images/506428274000260000/506428274000265570.png",
+                         "images/527736141479140000/527736141479149732.png"):
+                filename = os.path.join(path, file)
+                self.assertTrue(os.path.exists(filename))
+                with PIL.Image.open(filename) as image:
+                    self.assertEqual(image.format, "PNG")
+
+    def test_use_footprint(self):
+        """Test the use_footprint config option, generating a fake diaSrc
+        catalog that contains footprints that get used instead of config.size.
+        """
+        butler = unittest.mock.Mock(spec=lsst.daf.butler.Butler)
+
+        def mock_get(dataset, dataId, *args, **kwargs):
+            if "_diaSrc" in dataset:
+                # The science image is the only mock image with a source in it.
+                catalog = make_mock_catalog(self.science)
+                # Assign the matching source id to the detection.
+                match = DATA["visit"] == dataId["visit"]
+                catalog["id"] = DATA["diaSourceId"].to_numpy()[match][0]
+                return catalog
+            else:
+                return self.science
+
+        butler.get.side_effect = mock_get
+
+        with tempfile.TemporaryDirectory() as path:
+            config = zooniverseCutouts.ZooniverseCutoutsTask.ConfigClass()
+            config.use_footprint = True
             cutouts = zooniverseCutouts.ZooniverseCutoutsTask(config=config, output_path=path)
             result = cutouts.write_images(DATA, butler)
             self.assertEqual(result, list(DATA["diaSourceId"]))
