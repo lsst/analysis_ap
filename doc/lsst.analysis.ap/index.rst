@@ -54,7 +54,7 @@ Script reference
 .. toctree::
    :maxdepth: 1
 
-   scripts/zooniverseCutouts
+   scripts/plotImageSubtractionCutouts
 
 .. _lsst.analysis.ap-pyapi:
 
