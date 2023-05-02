@@ -38,6 +38,7 @@ import pathlib
 import astropy.units as u
 import numpy as np
 import pandas as pd
+import sqlalchemy
 
 from lsst.ap.association import UnpackApdbFlags
 import lsst.dax.apdb
@@ -760,7 +761,7 @@ def len_sources(apdb_query):
         Number of diaSources in this APDB.
     """
     with apdb_query.connection as connection:
-        count = connection.execute('select count(*) FROM "DiaSource";').scalar()
+        count = connection.execute(sqlalchemy.text('select count(*) FROM "DiaSource";')).scalar()
     return count
 
 
