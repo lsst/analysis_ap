@@ -212,7 +212,7 @@ class DbQuery(abc.ABC):
         return result
 
     def load_object(self, id):
-        """Load one diaObject.
+        """Load the most-recently updated version of one diaObject.
 
         Parameters
         ----------
@@ -225,19 +225,22 @@ class DbQuery(abc.ABC):
             The requested object.
         """
         table = self._tables["DiaObject"]
-        query = table.select().where(table.columns["validityStart"].isnot(None))
+        query = table.select().where(table.columns["validityEnd"] == None)  # noqa: E711
         query = query.where(table.columns["diaObjectId"] == id)
         with self.connection as connection:
             result = pd.read_sql_query(query, connection)
         return result.iloc[0]
 
-    def load_objects(self, limit=100000):
+    def load_objects(self, limit=100000, latest=True):
         """Load all diaObjects.
 
         Parameters
         ----------
         limit : `int`
             Maximum number of rows to return.
+        latest : `bool`
+            Only load diaObjects where validityEnd is None.
+            These are the most-recently updated diaObjects.
 
         Returns
         -------
@@ -245,7 +248,8 @@ class DbQuery(abc.ABC):
             All available diaObjects.
         """
         table = self._tables["DiaObject"]
-        query = table.select().where(table.columns["validityStart"].isnot(None))
+        if latest:
+            query = table.select().where(table.columns["validityEnd"] == None)  # noqa: E711
         query = query.order_by(table.columns["diaObjectId"])
         if limit is not None:
             query = query.limit(limit)
