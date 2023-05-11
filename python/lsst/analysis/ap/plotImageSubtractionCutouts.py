@@ -552,6 +552,7 @@ class CutoutPath:
     RuntimeError
         Raised if chunk_size is not a power of 10.
     """
+
     def __init__(self, root, chunk_size=None):
         self._root = root
         if chunk_size is not None and (log10(chunk_size) != int(log10(chunk_size))):
@@ -674,6 +675,18 @@ def build_argparser():
         help="Path to write the output images and manifest to; "
         "manifest is written here, while the images go to `OUTPUTPATH/images/`.",
     )
+    parser.add_argument(
+        "--spuriousnessMin",
+        type=float,
+        default=None,
+        help="Minimum spuriousness value (default=None) on which to filter the DiaSources.",
+    )
+    parser.add_argument(
+        "--spuriousnessMax",
+        type=float,
+        default=None,
+        help="Maximum spuriousness value (default=None) on which to filter the DiaSources.",
+    )
     return parser
 
 
@@ -713,7 +726,7 @@ def _make_apdbQuery(butler, instrument, sqlitefile=None, postgres_url=None, name
     return apdb_query
 
 
-def select_sources(apdb_query, limit):
+def select_sources(apdb_query, limit, spuriousnessMin=None, spuriousnessMax=None):
     """Load an APDB and return n sources from it.
 
     Parameters
@@ -722,6 +735,10 @@ def select_sources(apdb_query, limit):
         APDB query interface to load from.
     limit : `int`
         Number of sources to select from the APDB.
+    spuriousnessMin : `float`
+        Minimum spuriousness value on which to filter the DiaSources.
+    spuriousnessMax : `float`
+        Maximum spuriousness value on which to filter the DiaSources.
 
     Returns
     -------
@@ -734,6 +751,10 @@ def select_sources(apdb_query, limit):
             with apdb_query.connection as connection:
                 table = apdb_query._tables["DiaSource"]
                 query = table.select()
+                if spuriousnessMin is not None:
+                    query = query.where(table.columns['spuriousness'] >= spuriousnessMin)
+                if spuriousnessMax is not None:
+                    query = query.where(table.columns['spuriousness'] <= spuriousnessMax)
                 query = query.order_by(table.columns["ccdVisitId"], table.columns["diaSourceId"])
                 query = query.limit(limit).offset(offset)
                 sources = pd.read_sql_query(query, connection)
@@ -784,7 +805,7 @@ def run_cutouts(args):
                                  sqlitefile=args.sqlitefile,
                                  postgres_url=args.postgres_url,
                                  namespace=args.namespace)
-    data = select_sources(apdb_query, args.limit)
+    data = select_sources(apdb_query, args.limit, args.spuriousnessMin, args.spuriousnessMax)
 
     config = PlotImageSubtractionCutoutsConfig()
     if args.configFile is not None:
@@ -792,7 +813,7 @@ def run_cutouts(args):
     config.freeze()
     cutouts = PlotImageSubtractionCutoutsTask(config=config, output_path=args.outputPath)
 
-    getter = select_sources(apdb_query, args.limit)
+    getter = select_sources(apdb_query, args.limit, args.spuriousnessMin, args.spuriousnessMax)
     # Process just one block of length "limit", or all sources in the database?
     if not args.all:
         data = next(getter)
