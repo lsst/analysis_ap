@@ -123,7 +123,7 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
         size but shows more pixels.
         """
         config = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask.ConfigClass()
-        config.size = 100
+        config.sizes = [100]
         # output_path does nothing here, since we never write the file to disk.
         cutouts = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(config=config, output_path="")
         cutout = cutouts.generate_image(self.science, self.template, self.difference, skyCenter, self.scale)
@@ -174,6 +174,63 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
             # size (in inches) and the dpi (default=100), plus borders.
             self.assertEqual((im.height, im.width), (343, 645))
 
+    def test_generate_image_multisize_cutouts_without_metadata(self):
+        """Multiple cutout sizes: the resulting image is larger in size
+        and contains cutouts of multiple sizes.
+        """
+        config = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask.ConfigClass()
+        config.sizes = [32, 64]
+        # output_path does nothing here, since we never write the file to disk.
+        cutouts = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(config=config, output_path="")
+        cutout = cutouts.generate_image(self.science, self.template, self.difference, skyCenter, self.scale)
+        with PIL.Image.open(cutout) as im:
+            # NOTE: uncomment this to show the resulting image.
+            # im.show()
+            # NOTE: the dimensions here are determined by the matplotlib figure
+            # size (in inches) and the dpi (default=100), plus borders.
+            self.assertEqual((im.height, im.width), (450, 630))
+
+    def test_generate_image_multisize_cutouts_with_metadata(self):
+        """Test that we can add metadata to the image; it changes the height
+        a lot, and the width a little for the text boxes.
+
+        It's useful to have a person look at the output via:
+            im.show()
+        """
+        config = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask.ConfigClass()
+        config.add_metadata = True
+        config.sizes = [32, 64]
+        # output_path does nothing here, since we never write the file to disk.
+        cutouts = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(config=config, output_path="")
+        cutout = cutouts.generate_image(self.science,
+                                        self.template,
+                                        self.difference,
+                                        skyCenter,
+                                        self.scale,
+                                        source=DATA.iloc[0],
+                                        flags=self.flags[0])
+        with PIL.Image.open(cutout) as im:
+            # NOTE: uncomment this to show the resulting image.
+            # im.show()
+            # NOTE: the dimensions here are determined by the matplotlib figure
+            # size (in inches) and the dpi (default=100), plus borders.
+            self.assertEqual((im.height, im.width), (576, 645))
+
+        # A cutout without any flags: the dimensions should be unchanged.
+        cutout = cutouts.generate_image(self.science,
+                                        self.template,
+                                        self.difference,
+                                        skyCenter,
+                                        self.scale,
+                                        source=DATA.iloc[1],
+                                        flags=self.flags[1])
+        with PIL.Image.open(cutout) as im:
+            # NOTE: uncomment this to show the resulting image.
+            # im.show()
+            # NOTE: the dimensions here are determined by the matplotlib figure
+            # size (in inches) and the dpi (default=100), plus borders.
+            self.assertEqual((im.height, im.width), (576, 645))
+
     def test_generate_image_invalid_paramters(self):
         cutouts = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(output_path="")
         with self.assertRaisesRegex(RuntimeError, "Must pass both"):
@@ -215,7 +272,7 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
 
     def test_use_footprint(self):
         """Test the use_footprint config option, generating a fake diaSrc
-        catalog that contains footprints that get used instead of config.size.
+        catalog that contains footprints that get used instead of config.sizes.
         """
         butler = unittest.mock.Mock(spec=lsst.daf.butler.Butler)
 
@@ -300,11 +357,11 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
         """Test that the task is pickleable (necessary for multiprocessing).
         """
         config = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask.ConfigClass()
-        config.size = 63
+        config.sizes = [63]
         cutouts = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(config=config,
                                                                               output_path="something")
         other = pickle.loads(pickle.dumps(cutouts))
-        self.assertEqual(cutouts.config.size, other.config.size)
+        self.assertEqual(cutouts.config.sizes, other.config.sizes)
         self.assertEqual(cutouts._output_path, other._output_path)
 
 
