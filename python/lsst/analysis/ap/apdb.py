@@ -139,7 +139,7 @@ class DbQuery(abc.ABC):
             Id of object to load sources for.
         exclude_flagged : `bool`, optional
             Exclude sources that have selected flags set.
-            Use `set_DiaSource_exclude_flags` to configure which flags
+            Use `set_excluded_diaSource_flags` to configure which flags
             are excluded.
         limit : `int`
             Maximum number of rows to return.
@@ -147,7 +147,7 @@ class DbQuery(abc.ABC):
         Returns
         -------
         data : `pandas.DataFrame`
-            DiaSources for the specified diaObject.
+            A data frame of diaSources for the specified diaObject.
         """
         table = self._tables["DiaSource"]
         query = table.select().where(table.columns["diaObjectId"] == dia_object_id)
@@ -166,12 +166,12 @@ class DbQuery(abc.ABC):
         Parameters
         ----------
         id : `int`
-            DiaSourceId to load data for.
+            The diaSourceId to load data for.
 
         Returns
         -------
         data : `pandas.Series`
-            The requested source.
+            The requested diaSource.
         """
         table = self._tables["DiaSource"]
         query = table.select().where(table.columns["diaSourceId"] == id)
@@ -181,13 +181,13 @@ class DbQuery(abc.ABC):
         return result.iloc[0]
 
     def load_sources(self, exclude_flagged=False, limit=100000):
-        """Load DiaSources.
+        """Load diaSources.
 
         Parameters
         ----------
         exclude_flagged : `bool`, optional
             Exclude sources that have selected flags set.
-            Use `set_DiaSource_exclude_flags` to configure which flags
+            Use `set_excluded_diaSource_flags` to configure which flags
             are excluded.
         limit : `int`
             Maximum number of rows to return.
@@ -212,12 +212,12 @@ class DbQuery(abc.ABC):
         return result
 
     def load_object(self, id):
-        """Load one diaObject.
+        """Load the most-recently updated version of one diaObject.
 
         Parameters
         ----------
         id : `int`
-            DiaObjectId to load data for.
+            The diaObjectId to load data for.
 
         Returns
         -------
@@ -225,19 +225,22 @@ class DbQuery(abc.ABC):
             The requested object.
         """
         table = self._tables["DiaObject"]
-        query = table.select().where(table.columns["validityStart"].isnot(None))
+        query = table.select().where(table.columns["validityEnd"] == None)  # noqa: E711
         query = query.where(table.columns["diaObjectId"] == id)
         with self.connection as connection:
             result = pd.read_sql_query(query, connection)
         return result.iloc[0]
 
-    def load_objects(self, limit=100000):
-        """Load all DiaObjects.
+    def load_objects(self, limit=100000, latest=True):
+        """Load all diaObjects.
 
         Parameters
         ----------
         limit : `int`
             Maximum number of rows to return.
+        latest : `bool`
+            Only load diaObjects where validityEnd is None.
+            These are the most-recently updated diaObjects.
 
         Returns
         -------
@@ -245,7 +248,8 @@ class DbQuery(abc.ABC):
             All available diaObjects.
         """
         table = self._tables["DiaObject"]
-        query = table.select().where(table.columns["validityStart"].isnot(None))
+        if latest:
+            query = table.select().where(table.columns["validityEnd"] == None)  # noqa: E711
         query = query.order_by(table.columns["diaObjectId"])
         if limit is not None:
             query = query.limit(limit)
@@ -261,7 +265,7 @@ class DbQuery(abc.ABC):
         Parameters
         ----------
         id : `int`
-            DiaForcedSourceId to load data for.
+            The diaForcedSourceId to load data for.
 
         Returns
         -------
@@ -276,7 +280,7 @@ class DbQuery(abc.ABC):
         return result.iloc[0]
 
     def load_forced_sources(self, limit=100000):
-        """Load all DiaForcedSources.
+        """Load all diaForcedSources.
 
         Parameters
         ----------
@@ -299,24 +303,24 @@ class DbQuery(abc.ABC):
         self._fill_from_ccdVisitId(result)
         return result
 
-    def _fill_from_ccdVisitId(self, diaSource):
+    def _fill_from_ccdVisitId(self, diaSources):
         """Expand the ccdVisitId value in the database.
         This method is temporary, until the CcdVisit table is filled out.
 
         Parameters
         ----------
-        diaSource : `pandas.core.frame.DataFrame`
-            Pandas dataframe with DIA Sources from an APDB; modified in-place.
+        diaSources : `pandas.core.frame.DataFrame`
+            Pandas dataframe with diaSources from an APDB; modified in-place.
         """
         # do nothing for an empty series
-        if len(diaSource) == 0:
+        if len(diaSources) == 0:
             return
         instrumentDataId = self._butler.registry.expandDataId(instrument=self._instrument)
         packer = self._butler.registry.dimensions.makePacker("visit_detector", instrumentDataId)
-        dataId = packer.unpack(diaSource.ccdVisitId)
-        diaSource['visit'] = dataId['visit']
-        diaSource['detector'] = dataId['detector']
-        diaSource['instrument'] = self._instrument
+        dataId = packer.unpack(diaSources.ccdVisitId)
+        diaSources['visit'] = dataId['visit']
+        diaSources['detector'] = dataId['detector']
+        diaSources['instrument'] = self._instrument
 
 
 class ApdbSqliteQuery(DbQuery):
