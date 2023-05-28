@@ -543,9 +543,9 @@ def _annotate_image(fig, source, flags, len_sizes):
         fig.text(0.87, heights[3], "SHAPE", color="red", fontweight="bold")
 
     # rb score
-    if source['spuriousness'] is not None and np.isfinite(source['spuriousness']):
-        fig.text(0.73, heights[4], f"RB:{source['spuriousness']:.03f}",
-                 color='#e41a1c' if source['spuriousness'] < 0.5 else '#4daf4a',
+    if source['reliability'] is not None and np.isfinite(source['reliability']):
+        fig.text(0.73, heights[4], f"RB:{source['reliability']:.03f}",
+                 color='#e41a1c' if source['reliability'] < 0.5 else '#4daf4a',
                  fontweight="bold")
 
     fig.text(0.0, heights[4], "total (nJy):", color=flag_color if any(flags[flags_forced]) else text_color)
@@ -699,16 +699,16 @@ def build_argparser():
         "manifest is written here, while the images go to `OUTPUTPATH/images/`.",
     )
     parser.add_argument(
-        "--spuriousnessMin",
+        "--reliabilityMin",
         type=float,
         default=None,
-        help="Minimum spuriousness value (default=None) on which to filter the DiaSources.",
+        help="Minimum reliability value (default=None) on which to filter the DiaSources.",
     )
     parser.add_argument(
-        "--spuriousnessMax",
+        "--reliabilityMax",
         type=float,
         default=None,
-        help="Maximum spuriousness value (default=None) on which to filter the DiaSources.",
+        help="Maximum reliability value (default=None) on which to filter the DiaSources.",
     )
     return parser
 
@@ -749,7 +749,7 @@ def _make_apdbQuery(butler, instrument, sqlitefile=None, postgres_url=None, name
     return apdb_query
 
 
-def select_sources(apdb_query, limit, spuriousnessMin=None, spuriousnessMax=None):
+def select_sources(apdb_query, limit, reliabilityMin=None, reliabilityMax=None):
     """Load an APDB and return n sources from it.
 
     Parameters
@@ -758,10 +758,10 @@ def select_sources(apdb_query, limit, spuriousnessMin=None, spuriousnessMax=None
         APDB query interface to load from.
     limit : `int`
         Number of sources to select from the APDB.
-    spuriousnessMin : `float`
-        Minimum spuriousness value on which to filter the DiaSources.
-    spuriousnessMax : `float`
-        Maximum spuriousness value on which to filter the DiaSources.
+    reliabilityMin : `float`
+        Minimum reliability value on which to filter the DiaSources.
+    reliabilityMax : `float`
+        Maximum reliability value on which to filter the DiaSources.
 
     Returns
     -------
@@ -774,10 +774,10 @@ def select_sources(apdb_query, limit, spuriousnessMin=None, spuriousnessMax=None
             with apdb_query.connection as connection:
                 table = apdb_query._tables["DiaSource"]
                 query = table.select()
-                if spuriousnessMin is not None:
-                    query = query.where(table.columns['spuriousness'] >= spuriousnessMin)
-                if spuriousnessMax is not None:
-                    query = query.where(table.columns['spuriousness'] <= spuriousnessMax)
+                if reliabilityMin is not None:
+                    query = query.where(table.columns['reliability'] >= reliabilityMin)
+                if reliabilityMax is not None:
+                    query = query.where(table.columns['reliability'] <= reliabilityMax)
                 query = query.order_by(table.columns["ccdVisitId"], table.columns["diaSourceId"])
                 query = query.limit(limit).offset(offset)
                 sources = pd.read_sql_query(query, connection)
@@ -828,7 +828,7 @@ def run_cutouts(args):
                                  sqlitefile=args.sqlitefile,
                                  postgres_url=args.postgres_url,
                                  namespace=args.namespace)
-    data = select_sources(apdb_query, args.limit, args.spuriousnessMin, args.spuriousnessMax)
+    data = select_sources(apdb_query, args.limit, args.reliabilityMin, args.reliabilityMax)
 
     config = PlotImageSubtractionCutoutsConfig()
     if args.configFile is not None:
@@ -836,7 +836,7 @@ def run_cutouts(args):
     config.freeze()
     cutouts = PlotImageSubtractionCutoutsTask(config=config, output_path=args.outputPath)
 
-    getter = select_sources(apdb_query, args.limit, args.spuriousnessMin, args.spuriousnessMax)
+    getter = select_sources(apdb_query, args.limit, args.reliabilityMin, args.reliabilityMax)
     # Process just one block of length "limit", or all sources in the database?
     if not args.all:
         data = next(getter)
