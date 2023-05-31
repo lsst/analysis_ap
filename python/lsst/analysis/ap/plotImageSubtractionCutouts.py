@@ -51,10 +51,11 @@ from . import apdb
 
 
 class PlotImageSubtractionCutoutsConfig(pexConfig.Config):
-    size = pexConfig.Field(
-        doc="Width of cutout to extract for image from science, template, and difference exposures.",
+    sizes = pexConfig.ListField(
+        doc="List of widths of cutout to extract for image from science, \
+            template, and difference exposures.",
         dtype=int,
-        default=30,
+        default=[30],
     )
     use_footprint = pexConfig.Field(
         doc="Use source footprint to to define cutout region; "
@@ -334,44 +335,47 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         if (source is None) ^ (flags is None):
             raise RuntimeError("Must pass both `source` and `flags` together.")
         if not self.config.use_footprint:
-            extent = lsst.geom.Extent2I(self.config.size, self.config.size)
-            cutout_science = science.getCutout(center, extent)
-            cutout_template = template.getCutout(center, extent)
-            coutout_difference = difference.getCutout(center, extent)
-            size = self.config.size
+            sizes = self.config.sizes
+            cutout_science, cutout_template, cutout_difference = [], [], []
+            for i, s in enumerate(sizes):
+                extent = lsst.geom.Extent2I(s, s)
+                cutout_science.append(science.getCutout(center, extent))
+                cutout_template.append(template.getCutout(center, extent))
+                cutout_difference.append(difference.getCutout(center, extent))
         else:
-            cutout_science = science.subset(footprint.getBBox())
-            cutout_template = template.subset(footprint.getBBox())
-            coutout_difference = difference.subset(footprint.getBBox())
+            cutout_science = [science.subset(footprint.getBBox())]
+            cutout_template = [template.subset(footprint.getBBox())]
+            cutout_difference = [difference.subset(footprint.getBBox())]
             extent = footprint.getBBox().getDimensions()
             # Plot a square equal to the largest dimension.
-            size = extent.x if extent.x > extent.y else extent.y
-
+            sizes = [extent.x if extent.x > extent.y else extent.y]
         return self._plot_cutout(cutout_science,
                                  cutout_template,
-                                 coutout_difference,
+                                 cutout_difference,
                                  scale,
-                                 size,
+                                 sizes,
                                  source=source,
                                  flags=flags)
 
-    def _plot_cutout(self, science, template, difference, scale, size, source=None, flags=None):
+    def _plot_cutout(self, science, template, difference, scale, sizes, source=None, flags=None):
         """Plot the cutouts for a source in one image.
 
         Parameters
         ----------
-        science : `lsst.afw.image.ExposureF`
-            Cutout Science exposure to include in the image.
-        template : `lsst.afw.image.ExposureF`
-            Cutout template exposure to include in the image.
-        difference : `lsst.afw.image.ExposureF`
-             Cutout science minus template exposure to include in the image.
+        science : `list` [`lsst.afw.image.ExposureF`]
+            List of cutout Science exposure(s) to include in the image.
+        template : `list` [`lsst.afw.image.ExposureF`]
+            List of cutout template exposure(s) to include in the image.
+        difference : `list` [`lsst.afw.image.ExposureF`]
+            List of cutout science minus template exposure(s) to include
+            in the image.
         source : `numpy.record`, optional
             DiaSource record for this cutout, to add metadata to the image.
         scale : `float`
             Pixel scale in arcseconds.
-        size : `int`
-            x/y dimensions of of the images passed in, to set imshow extent.
+        size : `list` [`int`]
+            List of x/y dimensions of of the images passed in, to set imshow
+            extent.
         flags : `str`, optional
             Unpacked bits from the ``flags`` field in ``source``.
 
@@ -391,7 +395,7 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
 
         # TODO DM-32014: how do we color masked pixels (including edges)?
 
-        def plot_one_image(ax, data, name):
+        def plot_one_image(ax, data, size, name=None):
             """Plot a normalized image on an axis."""
             if name == "Difference":
                 norm = aviz.ImageNormalize(
@@ -410,16 +414,27 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
             ax.plot((x_line, x_line + 1.0/scale), (y_line, y_line), color="blue", lw=6)
             ax.plot((x_line, x_line + 1.0/scale), (y_line, y_line), color="yellow", lw=2)
             ax.axis("off")
-            ax.set_title(name)
+            if name is not None:
+                ax.set_title(name)
 
         try:
-            fig, (ax1, ax2, ax3) = plt.subplots(1, 3, constrained_layout=True)
-            plot_one_image(ax1, template.image.array, "Template")
-            plot_one_image(ax2, science.image.array, "Science")
-            plot_one_image(ax3, difference.image.array, "Difference")
+            len_sizes = len(sizes)
+            fig, axs = plt.subplots(len_sizes, 3, constrained_layout=True)
+            if len_sizes == 1:
+                plot_one_image(axs[0], template[0].image.array, sizes[0], "Template")
+                plot_one_image(axs[1], science[0].image.array, sizes[0], "Science")
+                plot_one_image(axs[2], difference[0].image.array, sizes[0], "Difference")
+            else:
+                plot_one_image(axs[0][0], template[0].image.array, sizes[0], "Template")
+                plot_one_image(axs[0][1], science[0].image.array, sizes[0], "Science")
+                plot_one_image(axs[0][2], difference[0].image.array, sizes[0], "Difference")
+                for i in range(1, len(axs)):
+                    plot_one_image(axs[i][0], template[i].image.array, sizes[i], None)
+                    plot_one_image(axs[i][1], science[i].image.array, sizes[i], None)
+                    plot_one_image(axs[i][2], difference[i].image.array, sizes[i], None)
             plt.tight_layout()
             if source is not None:
-                _annotate_image(fig, source, flags)
+                _annotate_image(fig, source, flags, len_sizes)
 
             output = io.BytesIO()
             plt.savefig(output, bbox_inches="tight", format="png")
@@ -430,7 +445,7 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         return output
 
 
-def _annotate_image(fig, source, flags):
+def _annotate_image(fig, source, flags, len_sizes):
     """Annotate the cutouts image with metadata and flags.
 
     Parameters
@@ -441,6 +456,8 @@ def _annotate_image(fig, source, flags):
         DiaSource record of the object being plotted.
     flags : `str`, optional
         Unpacked bits from the ``flags`` field in ``source``.
+    len_sizes : `int`
+        Length of the ``size`` array set in configuration.
     """
     # Names of flags fields to add a flag label to the image, using any().
     flags_psf = ["slot_PsfFlux_flag", "slot_PsfFlux_flag_noGoodPixels", "slot_PsfFlux_flag_edge"]
@@ -461,78 +478,84 @@ def _annotate_image(fig, source, flags):
 
     flag_color = "red"
     text_color = "grey"
+
+    if len_sizes == 1:
+        heights = [0.95, 0.91, 0.87, 0.83, 0.79]
+    else:
+        heights = [1.2, 1.15, 1.1, 1.05, 1.0]
+
     # NOTE: fig.text coordinates are in fractions of the figure.
-    fig.text(0, 0.95, "diaSourceId:", color=text_color)
-    fig.text(0.145, 0.95, f"{source['diaSourceId']}")
-    fig.text(0.43, 0.95, f"{source['instrument']}", fontweight="bold")
-    fig.text(0.64, 0.95, "detector:", color=text_color)
-    fig.text(0.74, 0.95, f"{source['detector']}")
-    fig.text(0.795, 0.95, "visit:", color=text_color)
-    fig.text(0.85, 0.95, f"{source['visit']}")
-    fig.text(0.95, 0.95, f"{source['filterName']}")
+    fig.text(0, heights[0], "diaSourceId:", color=text_color)
+    fig.text(0.145, heights[0], f"{source['diaSourceId']}")
+    fig.text(0.43, heights[0], f"{source['instrument']}", fontweight="bold")
+    fig.text(0.64, heights[0], "detector:", color=text_color)
+    fig.text(0.74, heights[0], f"{source['detector']}")
+    fig.text(0.795, heights[0], "visit:", color=text_color)
+    fig.text(0.85, heights[0], f"{source['visit']}")
+    fig.text(0.95, heights[0], f"{source['filterName']}")
 
-    fig.text(0.0, 0.91, "ra:", color=text_color)
-    fig.text(0.037, 0.91, f"{source['ra']:.8f}")
-    fig.text(0.21, 0.91, "dec:", color=text_color)
-    fig.text(0.265, 0.91, f"{source['decl']:+.8f}")
-    fig.text(0.50, 0.91, "detection S/N:", color=text_color)
-    fig.text(0.66, 0.91, f"{source['snr']:6.1f}")
-    fig.text(0.75, 0.91, "PSF chi2:", color=text_color)
-    fig.text(0.85, 0.91, f"{source['psChi2']/source['psNdata']:6.2f}")
+    fig.text(0.0, heights[1], "ra:", color=text_color)
+    fig.text(0.037, heights[1], f"{source['ra']:.8f}")
+    fig.text(0.21, heights[1], "dec:", color=text_color)
+    fig.text(0.265, heights[1], f"{source['decl']:+.8f}")
+    fig.text(0.50, heights[1], "detection S/N:", color=text_color)
+    fig.text(0.66, heights[1], f"{source['snr']:6.1f}")
+    fig.text(0.75, heights[1], "PSF chi2:", color=text_color)
+    fig.text(0.85, heights[1], f"{source['psChi2']/source['psNdata']:6.2f}")
 
-    fig.text(0.0, 0.87, "PSF (nJy):", color=flag_color if any(flags[flags_psf]) else text_color)
-    fig.text(0.25, 0.87, f"{source['psFlux']:8.1f}", horizontalalignment='right')
-    fig.text(0.252, 0.87, "+/-", color=text_color)
-    fig.text(0.29, 0.87, f"{source['psFluxErr']:8.1f}")
-    fig.text(0.40, 0.87, "S/N:", color=text_color)
-    fig.text(0.45, 0.87, f"{abs(source['psFlux']/source['psFluxErr']):6.2f}")
+    fig.text(0.0, heights[2], "PSF (nJy):", color=flag_color if any(flags[flags_psf]) else text_color)
+    fig.text(0.25, heights[2], f"{source['psFlux']:8.1f}", horizontalalignment='right')
+    fig.text(0.252, heights[2], "+/-", color=text_color)
+    fig.text(0.29, heights[2], f"{source['psFluxErr']:8.1f}")
+    fig.text(0.40, heights[2], "S/N:", color=text_color)
+    fig.text(0.45, heights[2], f"{abs(source['psFlux']/source['psFluxErr']):6.2f}")
 
     # NOTE: yellow is hard to read on white; use goldenrod instead.
     if any(flags[flags_edge]):
-        fig.text(0.55, 0.87, "EDGE", color="goldenrod", fontweight="bold")
+        fig.text(0.55, heights[2], "EDGE", color="goldenrod", fontweight="bold")
     if any(flags[flags_interp]):
-        fig.text(0.62, 0.87, "INTERP", color="green", fontweight="bold")
+        fig.text(0.62, heights[2], "INTERP", color="green", fontweight="bold")
     if any(flags[flags_saturated]):
-        fig.text(0.72, 0.87, "SAT", color="green", fontweight="bold")
+        fig.text(0.72, heights[2], "SAT", color="green", fontweight="bold")
     if any(flags[flags_cr]):
-        fig.text(0.77, 0.87, "CR", color="magenta", fontweight="bold")
+        fig.text(0.77, heights[2], "CR", color="magenta", fontweight="bold")
     if any(flags[flags_bad]):
-        fig.text(0.81, 0.87, "BAD", color="red", fontweight="bold")
+        fig.text(0.81, heights[2], "BAD", color="red", fontweight="bold")
     if source['isDipole']:
-        fig.text(0.87, 0.87, "DIPOLE", color="indigo", fontweight="bold")
+        fig.text(0.87, heights[2], "DIPOLE", color="indigo", fontweight="bold")
 
-    fig.text(0.0, 0.83, "ap (nJy):", color=flag_color if any(flags[flags_aperture]) else text_color)
-    fig.text(0.25, 0.83, f"{source['apFlux']:8.1f}", horizontalalignment='right')
-    fig.text(0.252, 0.83, "+/-", color=text_color)
-    fig.text(0.29, 0.83, f"{source['apFluxErr']:8.1f}")
-    fig.text(0.40, 0.83, "S/N:", color=text_color)
-    fig.text(0.45, 0.83, f"{abs(source['apFlux']/source['apFluxErr']):#6.2f}")
+    fig.text(0.0, heights[3], "ap (nJy):", color=flag_color if any(flags[flags_aperture]) else text_color)
+    fig.text(0.25, heights[3], f"{source['apFlux']:8.1f}", horizontalalignment='right')
+    fig.text(0.252, heights[3], "+/-", color=text_color)
+    fig.text(0.29, heights[3], f"{source['apFluxErr']:8.1f}")
+    fig.text(0.40, heights[3], "S/N:", color=text_color)
+    fig.text(0.45, heights[3], f"{abs(source['apFlux']/source['apFluxErr']):#6.2f}")
 
     if any(flags[flags_suspect]):
-        fig.text(0.55, 0.83, "SUS", color="goldenrod", fontweight="bold")
+        fig.text(0.55, heights[3], "SUS", color="goldenrod", fontweight="bold")
     if any(flags[flags_centroid]):
-        fig.text(0.60, 0.83, "CENTROID", color="red", fontweight="bold")
+        fig.text(0.60, heights[3], "CENTROID", color="red", fontweight="bold")
     if any(flags[flags_centroid_pos]):
-        fig.text(0.73, 0.83, "CEN+", color="chocolate", fontweight="bold")
+        fig.text(0.73, heights[3], "CEN+", color="chocolate", fontweight="bold")
     if any(flags[flags_centroid_neg]):
-        fig.text(0.80, 0.83, "CEN-", color="blue", fontweight="bold")
+        fig.text(0.80, heights[3], "CEN-", color="blue", fontweight="bold")
     if any(flags[flags_shape]):
-        fig.text(0.87, 0.83, "SHAPE", color="red", fontweight="bold")
+        fig.text(0.87, heights[3], "SHAPE", color="red", fontweight="bold")
 
     # rb score
     if source['spuriousness'] is not None and np.isfinite(source['spuriousness']):
-        fig.text(0.73, 0.79, f"RB:{source['spuriousness']:.03f}",
+        fig.text(0.73, heights[4], f"RB:{source['spuriousness']:.03f}",
                  color='#e41a1c' if source['spuriousness'] < 0.5 else '#4daf4a',
                  fontweight="bold")
 
-    fig.text(0.0, 0.79, "total (nJy):", color=flag_color if any(flags[flags_forced]) else text_color)
-    fig.text(0.25, 0.79, f"{source['totFlux']:8.1f}", horizontalalignment='right')
-    fig.text(0.252, 0.79, "+/-", color=text_color)
-    fig.text(0.29, 0.79, f"{source['totFluxErr']:8.1f}")
-    fig.text(0.40, 0.79, "S/N:", color=text_color)
-    fig.text(0.45, 0.79, f"{abs(source['totFlux']/source['totFluxErr']):6.2f}")
-    fig.text(0.55, 0.79, "ABmag:", color=text_color)
-    fig.text(0.635, 0.79, f"{(source['totFlux']*u.nanojansky).to_value(u.ABmag):.3f}")
+    fig.text(0.0, heights[4], "total (nJy):", color=flag_color if any(flags[flags_forced]) else text_color)
+    fig.text(0.25, heights[4], f"{source['totFlux']:8.1f}", horizontalalignment='right')
+    fig.text(0.252, heights[4], "+/-", color=text_color)
+    fig.text(0.29, heights[4], f"{source['totFluxErr']:8.1f}")
+    fig.text(0.40, heights[4], "S/N:", color=text_color)
+    fig.text(0.45, heights[4], f"{abs(source['totFlux']/source['totFluxErr']):6.2f}")
+    fig.text(0.55, heights[4], "ABmag:", color=text_color)
+    fig.text(0.635, heights[4], f"{(source['totFlux']*u.nanojansky).to_value(u.ABmag):.3f}")
 
 
 class CutoutPath:
