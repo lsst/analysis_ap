@@ -62,7 +62,7 @@ DATA = pd.DataFrame(
         "isDipole": [True, False],
         # all flags vs. no flags
         "flags": [~0, 0],
-        "spuriousness": [0, 1.0],
+        "reliability": [0, 1.0],
     }
 )
 
