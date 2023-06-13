@@ -114,7 +114,7 @@ def addTableMetadata(sourceTable, butler, instrument):
     if instrument is None:
         raise RuntimeError("Must specify instrument when expanding catalog metadata.")
     instrumentDataId = butler.registry.expandDataId(instrument=instrument)
-    packer = butler.registry.dimensions.makePacker("visit_detector", instrumentDataId)
+    packer = butler.dimensions.makePacker("visit_detector", instrumentDataId)
     dataId = packer.unpack(sourceTable.ccdVisitId)
     sourceTable['visit'] = dataId['visit']
     sourceTable['detector'] = dataId['detector']

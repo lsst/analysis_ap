@@ -316,7 +316,7 @@ class DbQuery(abc.ABC):
         if len(diaSources) == 0:
             return
         instrumentDataId = self._butler.registry.expandDataId(instrument=self._instrument)
-        packer = self._butler.registry.dimensions.makePacker("visit_detector", instrumentDataId)
+        packer = self._butler.dimensions.makePacker("visit_detector", instrumentDataId)
         dataId = packer.unpack(diaSources.ccdVisitId)
         diaSources['visit'] = dataId['visit']
         diaSources['detector'] = dataId['detector']
