@@ -343,9 +343,9 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
                 cutout_template.append(template.getCutout(center, extent))
                 cutout_difference.append(difference.getCutout(center, extent))
         else:
-            cutout_science = [science.subset(footprint.getBBox())]
-            cutout_template = [template.subset(footprint.getBBox())]
-            cutout_difference = [difference.subset(footprint.getBBox())]
+            cutout_science = [science.getCutout(footprint.getBBox())]
+            cutout_template = [template.getCutout(footprint.getBBox())]
+            cutout_difference = [difference.getCutout(footprint.getBBox())]
             extent = footprint.getBBox().getDimensions()
             # Plot a square equal to the largest dimension.
             sizes = [extent.x if extent.x > extent.y else extent.y]
