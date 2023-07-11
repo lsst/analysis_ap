@@ -45,7 +45,7 @@ DATA = pd.DataFrame(
     data={
         "diaSourceId": [506428274000265570, 527736141479149732],
         "ra": [skyCenter.getRa().asDegrees()+0.0001, skyCenter.getRa().asDegrees()-0.0001],
-        "decl": [skyCenter.getDec().asDegrees()+0.0001, skyCenter.getDec().asDegrees()-0.001],
+        "dec": [skyCenter.getDec().asDegrees()+0.0001, skyCenter.getDec().asDegrees()-0.001],
         "detector": [50, 60],
         "visit": [1234, 5678],
         "instrument": ["TestMock", "TestMock"],

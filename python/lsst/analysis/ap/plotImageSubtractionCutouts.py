@@ -149,7 +149,7 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
             The diaSourceIds of the sources that had cutouts succesfully made.
         """
         if self.config.url_root is not None:
-            manifest = self.make_manifest(sources)
+            manifest = self._make_manifest(sources)
             manifest.to_csv(os.path.join(self._output_path, "manifest.csv"), index=False)
         else:
             self.log.info("No url_root config provided, so no Zooniverse manifest file was written.")
@@ -264,7 +264,7 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
             return butler.get(f'{self.config.diff_image_type}_diaSrc', dataId)
 
         try:
-            center = lsst.geom.SpherePoint(source["ra"], source["decl"], lsst.geom.degrees)
+            center = lsst.geom.SpherePoint(source["ra"], source["dec"], lsst.geom.degrees)
             science, template, difference = get_exposures(source["instrument"],
                                                           source["detector"],
                                                           source["visit"])
@@ -497,7 +497,7 @@ def _annotate_image(fig, source, flags, len_sizes):
     fig.text(0.0, heights[1], "ra:", color=text_color)
     fig.text(0.037, heights[1], f"{source['ra']:.8f}")
     fig.text(0.21, heights[1], "dec:", color=text_color)
-    fig.text(0.265, heights[1], f"{source['decl']:+.8f}")
+    fig.text(0.265, heights[1], f"{source['dec']:+.8f}")
     fig.text(0.50, heights[1], "detection S/N:", color=text_color)
     fig.text(0.66, heights[1], f"{source['snr']:6.1f}")
     fig.text(0.75, heights[1], "PSF chi2:", color=text_color)

@@ -148,7 +148,7 @@ def loadSelectApdbSources(dbName, diaObjectId, dbType='sqlite', schema=None):
 
     # Load data from the source table
     srcTable = pd.read_sql_query('select "diaSourceId", "diaObjectId", \
-                                  "ra", "decl", "ccdVisitId", "filterName", \
+                                  "ra", "dec", "ccdVisitId", "filterName", \
                                   "midPointTai", "apFlux", "psFlux", "apFluxErr", \
                                   "psFluxErr", "totFlux", "totFluxErr", "snr", "x", "y", \
                                   "ixxPSF", "iyyPSF", "ixyPSF", "flags" from {0}; \
@@ -484,7 +484,7 @@ def loadAllApdbObjects(dbName, dbType='sqlite', schema=None, allCol=False):
 
     # Only get objects with validityEnd NULL as they are still valid
     if not allCol:
-        objTable = pd.read_sql_query('select "diaObjectId", "ra", "decl", "nDiaSources", \
+        objTable = pd.read_sql_query('select "diaObjectId", "ra", "dec", "nDiaSources", \
                                     "gPSFluxMean", "rPSFluxMean", "iPSFluxMean", \
                                     "zPSFluxMean", "yPSFluxMean", "validityEnd", "flags" from {0} \
                                     where "validityEnd" is NULL;'.format('"DiaObject"'), connection)
@@ -522,7 +522,7 @@ def loadAllApdbSources(dbName, dbType='sqlite', schema=None, allCol=False):
     # Load data from the source table
     if not allCol:
         srcTable = pd.read_sql_query('select "diaSourceId", "diaObjectId", \
-                                    "ra", "decl", "ccdVisitId", \
+                                    "ra", "dec", "ccdVisitId", \
                                     "midPointTai", "apFlux", "psFlux", "apFluxErr", \
                                     "psFluxErr", "totFlux", "totFluxErr", "snr", "x", "y", \
                                     "ixxPSF", "iyyPSF", "ixyPSF", "flags", "filterName" from {0}; \
@@ -562,7 +562,7 @@ def loadAllApdbForcedSources(dbName, dbType='sqlite', schema=None, allCol=False)
     # Load data from the forced source table
     if not allCol:
         forcedSrcTable = pd.read_sql_query('select "diaSourceId", "diaObjectId", \
-                                        "ra", "decl", "ccdVisitId", \
+                                        "ra", "dec", "ccdVisitId", \
                                         "midPointTai", "apFlux", "psFlux", "apFluxErr", \
                                         "psFluxErr", "totFlux", "totFluxErr", "snr", "x", "y", \
                                         "ixxPSF", "iyyPSF", "ixyPSF", "flags", "filterName" from {0}; \
@@ -599,7 +599,7 @@ def loadApdbSourcesByVisit(dbName, visit, dbType='sqlite', schema=None):
     connection = connectToApdb(dbName, dbType, schema)
     # Load data from the source table
     srcTable = pd.read_sql_query('select "diaSourceId", "diaObjectId", \
-                                  "ra", "decl", "ccdVisitId", \
+                                  "ra", "dec", "ccdVisitId", \
                                   "midPointTai", "apFlux", "psFlux", "apFluxErr", \
                                   "psFluxErr", "totFlux", "totFluxErr", "snr", "x", "y", \
                                   "ixxPSF", "iyyPSF", "ixyPSF", "flags", "filterName" from {0} \
@@ -634,7 +634,7 @@ def loadApdbSourcesByBand(dbName, band, dbType='sqlite', schema=None):
     connection = connectToApdb(dbName, dbType, schema)
     # Load data from the source table
     srcTable = pd.read_sql_query('select "diaSourceId", "diaObjectId", \
-                                  "ra", "decl", "ccdVisitId", \
+                                  "ra", "dec", "ccdVisitId", \
                                   "midPointTai", "apFlux", "psFlux", \
                                   "apFluxErr", "psFluxErr", "totFlux", \
                                   "totFluxErr", "snr", "x", "y", "ixxPSF", \

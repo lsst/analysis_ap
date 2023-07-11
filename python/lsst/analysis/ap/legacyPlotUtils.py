@@ -105,13 +105,13 @@ def plotDiaObjectsOnSky(rerunName, objTable, objFilter, hits):
     fig = plt.figure(facecolor='white', figsize=(10, 8))
 
     if hits:  # two subplots
-        dec_set1 = (objTable['decl'] > -2) & objFilter
+        dec_set1 = (objTable['dec'] > -2) & objFilter
         dec_set2 = (~dec_set1) & objFilter
         plt.subplots_adjust(wspace=0.1, hspace=0)
 
         # Panel 1: one HiTS field, on the right
         ax1 = plt.subplot2grid((100, 100), (0, 55), rowspan=90, colspan=45)
-        plot1 = ax1.scatter(objTable.loc[dec_set1, 'ra'], objTable.loc[dec_set1, 'decl'],
+        plot1 = ax1.scatter(objTable.loc[dec_set1, 'ra'], objTable.loc[dec_set1, 'dec'],
                             marker='.', lw=0, s=objTable.loc[dec_set1, 'nDiaSources']*8,
                             c=objTable.loc[dec_set1, 'nDiaSources'], alpha=0.7,
                             cmap='viridis', linewidth=0.5, edgecolor='k')
@@ -133,7 +133,7 @@ def plotDiaObjectsOnSky(rerunName, objTable, objFilter, hits):
 
         # Panel 2: two (overlapping) HiTS fields, on the left
         ax2 = plt.subplot2grid((100, 100), (0, 0), rowspan=90, colspan=50)
-        plot2 = ax2.scatter(objTable.loc[dec_set2, 'ra'], objTable.loc[dec_set2, 'decl'],
+        plot2 = ax2.scatter(objTable.loc[dec_set2, 'ra'], objTable.loc[dec_set2, 'dec'],
                             marker='.', lw=0, s=objTable.loc[dec_set2, 'nDiaSources']*8,
                             c=objTable.loc[dec_set2, 'nDiaSources'], alpha=0.7,
                             cmap='viridis', linewidth=0.5, edgecolor='k')
@@ -153,7 +153,7 @@ def plotDiaObjectsOnSky(rerunName, objTable, objFilter, hits):
     else:  # one main plot
         ax = fig.add_subplot(111)
         plot = ax.scatter(objTable.loc[objFilter, 'ra'],
-                          objTable.loc[objFilter, 'decl'], marker='.', lw=0,
+                          objTable.loc[objFilter, 'dec'], marker='.', lw=0,
                           s=objTable.loc[objFilter, 'nDiaSources']*8,
                           c=objTable.loc[objFilter, 'nDiaSources'],
                           alpha=0.7, cmap='viridis', linewidth=0.5, edgecolor='k')
@@ -481,14 +481,14 @@ def plotHitsSourcesOnSky(sourceTable, title=''):
     ax2 = plt.subplot2grid((100, 100), (0, 0),
                            rowspan=90, colspan=50)  # 2 overlapping HiTS fields, on the left
 
-    ax1Filter = (sourceTable['decl'] > -2)
+    ax1Filter = (sourceTable['dec'] > -2)
     ax2Filter = (~ax1Filter)
 
     ax1.scatter(sourceTable.loc[ax1Filter, 'ra'],
-                sourceTable.loc[ax1Filter, 'decl'],
+                sourceTable.loc[ax1Filter, 'dec'],
                 c='C0', s=2, alpha=0.2)
     ax2.scatter(sourceTable.loc[ax2Filter, 'ra'],
-                sourceTable.loc[ax2Filter, 'decl'],
+                sourceTable.loc[ax2Filter, 'dec'],
                 c='C0', s=2, alpha=0.2)
 
     ax1.set_xlabel('RA (deg)')
@@ -636,7 +636,7 @@ def plotDiaSourcesOnSkyGrid(repo, sourceTable, title=None, color='C0', size=0.1)
     for count, visit in enumerate(np.unique(sourceTable['visit'].values)):
         idx = sourceTable.visit == visit
         ax = fig.add_subplot(squareGridSize, squareGridSize, count + 1, aspect='equal')
-        ax.scatter(sourceTable.ra[idx], sourceTable.decl[idx], c=color,
+        ax.scatter(sourceTable.ra[idx], sourceTable.dec[idx], c=color,
                    marker='.', s=size, alpha=0.2)
         ax.set_title(visit, size=8)
         ax.invert_xaxis()
