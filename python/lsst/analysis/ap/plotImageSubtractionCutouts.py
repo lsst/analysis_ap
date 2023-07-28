@@ -399,7 +399,11 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
             """Plot a normalized image on an axis."""
             if name == "Difference":
                 norm = aviz.ImageNormalize(
-                    data, interval=aviz.ZScaleInterval(), stretch=aviz.LinearStretch()
+                    # focus on a rect of dim 15 at the center of the image.
+                    data[data.shape[0] // 2 - 7:data.shape[0] // 2 + 8,
+                         data.shape[1] // 2 - 7:data.shape[1] // 2 + 8],
+                    interval=aviz.MinMaxInterval(),
+                    stretch=aviz.AsinhStretch(a=0.1),
                 )
             else:
                 norm = aviz.ImageNormalize(
