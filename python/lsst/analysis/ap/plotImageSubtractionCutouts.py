@@ -606,7 +606,7 @@ def _annotate_image(fig, source, flags, len_sizes):
                  color='#e41a1c' if source['reliability'] < 0.5 else '#4daf4a',
                  fontweight="bold")
 
-    fig.text(0.0, heights[4], "total (nJy):", color=flag_color if any(flags[flags_forced]) else text_color)
+    fig.text(0.0, heights[4], "sci (nJy):", color=flag_color if any(flags[flags_forced]) else text_color)
     fig.text(0.25, heights[4], f"{source['scienceFlux']:8.1f}", horizontalalignment='right')
     fig.text(0.252, heights[4], "+/-", color=text_color)
     fig.text(0.29, heights[4], f"{source['scienceFluxErr']:8.1f}")
