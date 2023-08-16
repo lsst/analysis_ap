@@ -76,6 +76,11 @@ class PlotImageSubtractionCutoutsConfig(pexConfig.Config):
         dtype=str,
         default="deepDiff",
     )
+    science_image_type = pexConfig.Field(
+        doc="Dataset type of science image to use for cutouts.",
+        dtype=str,
+        default="calexp",
+    )
     add_metadata = pexConfig.Field(
         doc="Annotate the cutouts with catalog metadata, including coordinates, fluxes, flags, etc.",
         dtype=bool,
@@ -254,7 +259,7 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
             lru_cache above.
             """
             dataId = {'instrument': instrument, 'detector': detector, 'visit': visit}
-            return (butler.get('calexp', dataId),
+            return (butler.get(self.config.science_image_type, dataId),
                     butler.get(f'{self.config.diff_image_type}_templateExp', dataId),
                     butler.get(f'{self.config.diff_image_type}_differenceExp', dataId))
 
