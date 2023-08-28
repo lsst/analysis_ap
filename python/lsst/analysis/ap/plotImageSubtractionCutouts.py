@@ -28,7 +28,6 @@ __all__ = ["PlotImageSubtractionCutoutsConfig", "PlotImageSubtractionCutoutsTask
 import argparse
 import functools
 import io
-import itertools
 import logging
 from math import log10
 import multiprocessing
@@ -48,6 +47,81 @@ import lsst.pipe.base
 import lsst.utils
 
 from . import apdb
+
+
+class _ButlerCache:
+    """Global class to handle butler queries, to allow lru_cache and
+    `multiprocessing.Pool` to work together.
+
+    If we redo this all to work with BPS or other parallelized systems, or get
+    good butler-side caching, we could remove this lru_cache system.
+    """
+
+    def set(self, butler, config):
+        """Call this to store a Butler and Config instance before using the
+        global class instance.
+
+        Parameters
+        ----------
+        butler : `lsst.daf.butler.Butler`
+            Butler instance to store.
+        config : `lsst.pex.config.Config`
+            Config instance to store.
+        """
+        self._butler = butler
+        self._config = config
+        # Ensure the caches are empty if we've been re-set.
+        self.get_exposures.cache_clear()
+        self.get_catalog.cache_clear()
+
+    @functools.lru_cache(maxsize=4)
+    def get_exposures(self, instrument, detector, visit):
+        """Return science, template, difference exposures, using a small
+        cache so we don't have to re-read files as often.
+
+        Parameters
+        ----------
+        instrument : `str`
+            Instrument name to define the data id.
+        detector : `int`
+            Detector id to define the data id.
+        visit : `int`
+            Visit id to define the data id.
+
+        Returns
+        -------
+        exposures : `tuple` [`lsst.afw.image.ExposureF`]
+            Science, template, and difference exposure for this data id.
+        """
+        data_id = {'instrument': instrument, 'detector': detector, 'visit': visit}
+        return (self._butler.get(self._config.science_image_type, data_id),
+                self._butler.get(f'{self._config.diff_image_type}_templateExp', data_id),
+                self._butler.get(f'{self._config.diff_image_type}_differenceExp', data_id))
+
+    @functools.lru_cache(maxsize=4)
+    def get_catalog(self, instrument, detector, visit):
+        """Return the diaSrc catalog from the butler.
+
+        Parameters
+        ----------
+        instrument : `str`
+            Instrument name to define the data id.
+        detector : `int`
+            Detector id to define the data id.
+        visit : `int`
+            Visit id to define the data id.
+
+        Returns
+        -------
+        catalog : `lsst.afw.table.SourceCatalog`
+            DiaSource catalog for this data id.
+            """
+        data_id = {'instrument': instrument, 'detector': detector, 'visit': visit}
+        return self._butler.get(f'{self._config.diff_image_type}_diaSrc', data_id)
+
+
+# Global used within each multiprocessing worker (or single process).
+butler_cache = _ButlerCache()
 
 
 class PlotImageSubtractionCutoutsConfig(pexConfig.Config):
@@ -213,13 +287,13 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         pathlib.Path(os.path.join(self._output_path, "images")).mkdir(exist_ok=True)
 
         sources = []
+        butler_cache.set(butler, self.config)
         if njobs > 0:
             with multiprocessing.Pool(njobs) as pool:
-                sources = pool.starmap(self._do_one_source, zip(data.to_records(), flags,
-                                                                itertools.repeat(butler)))
+                sources = pool.starmap(self._do_one_source, zip(data.to_records(), flags))
         else:
             for i, source in enumerate(data.to_records()):
-                id = self._do_one_source(source, flags[i], butler)
+                id = self._do_one_source(source, flags[i])
                 sources.append(id)
 
         # restore numpy error message state
@@ -227,7 +301,7 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         # Only return successful ids, not failures.
         return [s for s in sources if s is not None]
 
-    def _do_one_source(self, source, flags, butler):
+    def _do_one_source(self, source, flags):
         """Make cutouts for one diaSource.
 
         Parameters
@@ -237,46 +311,21 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         flags : `str`, optional
             Unpacked bits from the ``flags`` field in ``source``.
             Required if ``source`` is not None.
-        butler : `lsst.daf.butler.Butler`
-            Butler connection to use to load the data; create it with the
-            collections you wish to load images from.
 
         Returns
         -------
         diaSourceId : `int` or None
             Id of the source that was generated, or None if there was an error.
         """
-        @functools.lru_cache(maxsize=4)
-        def get_exposures(instrument, detector, visit):
-            """Return science, template, difference exposures, using a small
-            cache so we don't have to re-read files as often.
-
-            NOTE: Closure because it needs access to the local-scoped butler,
-            as lru_cache can't have mutable args in the decorated method.
-
-            If we redo this all to work with BPS or other parallelized
-            systems, or get good butler-side caching, we could remove the
-            lru_cache above.
-            """
-            dataId = {'instrument': instrument, 'detector': detector, 'visit': visit}
-            return (butler.get(self.config.science_image_type, dataId),
-                    butler.get(f'{self.config.diff_image_type}_templateExp', dataId),
-                    butler.get(f'{self.config.diff_image_type}_differenceExp', dataId))
-
-        @functools.lru_cache(maxsize=4)
-        def get_catalog(instrument, detector, visit):
-            dataId = {'instrument': instrument, 'detector': detector, 'visit': visit}
-            return butler.get(f'{self.config.diff_image_type}_diaSrc', dataId)
-
         try:
             center = lsst.geom.SpherePoint(source["ra"], source["dec"], lsst.geom.degrees)
-            science, template, difference = get_exposures(source["instrument"],
-                                                          source["detector"],
-                                                          source["visit"])
+            science, template, difference = butler_cache.get_exposures(source["instrument"],
+                                                                       source["detector"],
+                                                                       source["visit"])
             if self.config.use_footprint:
-                catalog = get_catalog(source["instrument"],
-                                      source["detector"],
-                                      source["visit"])
+                catalog = butler_cache.get_catalog(source["instrument"],
+                                                   source["detector"],
+                                                   source["visit"])
                 # The input catalogs must be sorted.
                 if not catalog.isSorted():
                     dataId = {'instrument': source["instrument"],
