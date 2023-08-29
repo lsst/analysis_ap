@@ -907,7 +907,7 @@ def run_cutouts(args):
         count = len_sources(apdb_query)
         for i, data in enumerate(getter):
             sources.extend(cutouts.write_images(data, butler, njobs=args.jobs))
-            print(f"Completed {i} batches of {args.limit} size, out of {count} diaSources.")
+            print(f"Completed {i+1} batches of {args.limit} size, out of {count} diaSources.")
         cutouts.write_manifest(sources)
 
     print(f"Generated {len(sources)} diaSource cutouts to {args.outputPath}.")
