@@ -47,13 +47,16 @@ Input datasets
 --------------
 
 ``*_warpedExp``
-    The template image that the template cutout is extracted from.
+    Template image that the template cutout is extracted from.
 
 ``calexp``
-    The science image that the science cutout is extracted from.
+    Science image that the science cutout is extracted from.
 
 ``*_differenceExp``
-    The difference image that the difference cutout is extracted from.
+    Difference image that the difference cutout is extracted from.
+
+``*_diaSrc``
+    DiaSource catalog measured on the difference image (used to load footprints when ``use_footprint==True``).
 
 .. _lsst.analysis.ap.PlotImageSubtractionCutoutsTask-outputs:
 

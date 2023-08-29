@@ -713,7 +713,9 @@ def build_argparser():
         default=5,
         type=int,
         help="Number of sources to load from the APDB (default=5), or the "
-             "number of sources to load per 'page' when `--all` is set.",
+             "number of sources to load per 'page' when `--all` is set. "
+             "This should be significantly larger (100x or more) than the value of `-j`, "
+             "to ensure efficient use of each process.",
     )
     parser.add_argument(
         "--all",
@@ -728,7 +730,8 @@ def build_argparser():
         default=0,
         type=int,
         help="Number of processes to use when generating cutouts. "
-             "Specify 0 (the default) to not use multiprocessing at all."
+             "Specify 0 (the default) to not use multiprocessing at all. "
+             "Note that `--limit` determines how efficiently each process is filled."
     )
 
     parser.add_argument(
