@@ -328,10 +328,10 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
                                                    source["visit"])
                 # The input catalogs must be sorted.
                 if not catalog.isSorted():
-                    dataId = {'instrument': source["instrument"],
-                              'detector': source["detector"],
-                              'visit': source["visit"]}
-                    msg = f"{self.config.diff_image_type}_diaSrc catalog for {dataId} is not sorted!"
+                    data_id = {'instrument': source["instrument"],
+                               'detector': source["detector"],
+                               'visit': source["visit"]}
+                    msg = f"{self.config.diff_image_type}_diaSrc catalog for {data_id} is not sorted!"
                     raise RuntimeError(msg)
                 record = catalog.find(source['diaSourceId'])
                 footprint = record.getFootprint()
