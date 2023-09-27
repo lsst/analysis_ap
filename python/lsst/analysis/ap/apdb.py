@@ -34,6 +34,7 @@ import sqlalchemy
 
 import lsst.utils
 from lsst.ap.association import UnpackApdbFlags
+from lsst.pipe.base import Instrument
 
 
 class DbQuery(abc.ABC):
@@ -316,7 +317,8 @@ class DbQuery(abc.ABC):
         if len(diaSources) == 0:
             return
         instrumentDataId = self._butler.registry.expandDataId(instrument=self._instrument)
-        packer = self._butler.dimensions.makePacker("visit_detector", instrumentDataId)
+        packer = Instrument.make_default_dimension_packer(data_id=instrumentDataId,
+                                                          is_exposure=False)
         dataId = packer.unpack(diaSources.ccdVisitId)
         diaSources['visit'] = dataId['visit']
         diaSources['detector'] = dataId['detector']
