@@ -550,7 +550,7 @@ def _annotate_image(fig, source, flags, len_sizes):
     fig.text(0.74, heights[0], f"{source['detector']}")
     fig.text(0.795, heights[0], "visit:", color=text_color)
     fig.text(0.85, heights[0], f"{source['visit']}")
-    fig.text(0.95, heights[0], f"{source['filterName']}")
+    fig.text(0.95, heights[0], f"{source['band']}")
 
     fig.text(0.0, heights[1], "ra:", color=text_color)
     fig.text(0.037, heights[1], f"{source['ra']:.8f}")
@@ -559,14 +559,14 @@ def _annotate_image(fig, source, flags, len_sizes):
     fig.text(0.50, heights[1], "detection S/N:", color=text_color)
     fig.text(0.66, heights[1], f"{source['snr']:6.1f}")
     fig.text(0.75, heights[1], "PSF chi2:", color=text_color)
-    fig.text(0.85, heights[1], f"{source['psChi2']/source['psNdata']:6.2f}")
+    fig.text(0.85, heights[1], f"{source['psfChi2']/source['psfNdata']:6.2f}")
 
     fig.text(0.0, heights[2], "PSF (nJy):", color=flag_color if any(flags[flags_psf]) else text_color)
-    fig.text(0.25, heights[2], f"{source['psFlux']:8.1f}", horizontalalignment='right')
+    fig.text(0.25, heights[2], f"{source['psfFlux']:8.1f}", horizontalalignment='right')
     fig.text(0.252, heights[2], "+/-", color=text_color)
-    fig.text(0.29, heights[2], f"{source['psFluxErr']:8.1f}")
+    fig.text(0.29, heights[2], f"{source['psfFluxErr']:8.1f}")
     fig.text(0.40, heights[2], "S/N:", color=text_color)
-    fig.text(0.45, heights[2], f"{abs(source['psFlux']/source['psFluxErr']):6.2f}")
+    fig.text(0.45, heights[2], f"{abs(source['psfFlux']/source['psfFluxErr']):6.2f}")
 
     # NOTE: yellow is hard to read on white; use goldenrod instead.
     if any(flags[flags_edge]):
@@ -607,13 +607,13 @@ def _annotate_image(fig, source, flags, len_sizes):
                  fontweight="bold")
 
     fig.text(0.0, heights[4], "total (nJy):", color=flag_color if any(flags[flags_forced]) else text_color)
-    fig.text(0.25, heights[4], f"{source['totFlux']:8.1f}", horizontalalignment='right')
+    fig.text(0.25, heights[4], f"{source['scienceFlux']:8.1f}", horizontalalignment='right')
     fig.text(0.252, heights[4], "+/-", color=text_color)
-    fig.text(0.29, heights[4], f"{source['totFluxErr']:8.1f}")
+    fig.text(0.29, heights[4], f"{source['scienceFluxErr']:8.1f}")
     fig.text(0.40, heights[4], "S/N:", color=text_color)
-    fig.text(0.45, heights[4], f"{abs(source['totFlux']/source['totFluxErr']):6.2f}")
+    fig.text(0.45, heights[4], f"{abs(source['scienceFlux']/source['scienceFluxErr']):6.2f}")
     fig.text(0.55, heights[4], "ABmag:", color=text_color)
-    fig.text(0.635, heights[4], f"{(source['totFlux']*u.nanojansky).to_value(u.ABmag):.3f}")
+    fig.text(0.635, heights[4], f"{(source['scienceFlux']*u.nanojansky).to_value(u.ABmag):.3f}")
 
 
 class CutoutPath:
