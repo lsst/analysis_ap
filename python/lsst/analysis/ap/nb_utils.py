@@ -276,8 +276,10 @@ def compare_sources(butler1, butler2, query1, query2,
         # Only write those that don't exist yet
         pisct.write_images(pathchk1, butler=butler1, njobs=njobs)
 
-        pisct.config.diff_image_type = diffimg_type2
-        pisct.config.output_path = cutout_path2
+        # Create a new instance for writing the second set of cutouts
+        config.diff_image_type = diffimg_type2
+        pisct = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(
+            output_path=cutout_path2, config=config)
         pisct.write_images(pathchk2, butler=butler2, njobs=njobs)
 
         if display_cutouts:
