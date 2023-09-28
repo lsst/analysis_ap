@@ -31,6 +31,7 @@ import warnings
 
 import pandas as pd
 import sqlalchemy
+import numpy as np
 
 import lsst.utils
 from lsst.ap.association import UnpackApdbFlags
@@ -319,9 +320,15 @@ class DbQuery(abc.ABC):
         instrumentDataId = self._butler.registry.expandDataId(instrument=self._instrument)
         packer = Instrument.make_default_dimension_packer(data_id=instrumentDataId,
                                                           is_exposure=False)
-        dataId = packer.unpack(diaSources.ccdVisitId)
-        diaSources['visit'] = dataId['visit']
-        diaSources['detector'] = dataId['detector']
+
+        tempvisit = np.zeros(len(diaSources), dtype=np.int64)
+        tempdetector = np.zeros(len(diaSources), dtype=np.int64)
+        for i, ccdVisitId in enumerate(diaSources.ccdVisitId):
+            dataId = packer.unpack(ccdVisitId)
+            tempvisit[i] = dataId['visit']
+            tempdetector[i] = dataId['detector']
+        diaSources['visit'] = tempvisit
+        diaSources['detector'] = tempdetector
         diaSources['instrument'] = self._instrument
 
 
