@@ -263,31 +263,33 @@ def compare_sources(butler1, butler2, query1, query2,
         for i in range(len(unique1)):
             dId = unique1.iloc[i]['diaSourceId']
             idx = unique1.index[i]
-            unique1.at[idx, 'pathexists'] = os.path.exists(cpath1.call(dId))
+            unique1.at[idx, 'pathexists'] = os.path.exists(cpath1(dId))
         pathchk1 = unique1.loc[~unique1['pathexists']]
 
         unique2['pathexists'] = False
         for i in range(len(unique2)):
             dId = unique2.iloc[i]['diaSourceId']
             idx = unique2.index[i]
-            unique2.at[idx, 'pathexists'] = os.path.exists(cpath2.call(dId))
+            unique2.at[idx, 'pathexists'] = os.path.exists(cpath2(dId))
         pathchk2 = unique2.loc[~unique2['pathexists']]
 
         # Only write those that don't exist yet
         pisct.write_images(pathchk1, butler=butler1, njobs=njobs)
 
-        pisct.config.diff_image_type = diffimg_type2
-        pisct.config.output_path = cutout_path2
+        # Create a new instance for writing the second set of cutouts
+        config.diff_image_type = diffimg_type2
+        pisct = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(
+            output_path=cutout_path2, config=config)
         pisct.write_images(pathchk2, butler=butler2, njobs=njobs)
 
         if display_cutouts:
             for isrc in unique1.itertuples():
-                fpath = cpath1.call(int(isrc.diaSourceId))
+                fpath = cpath1(int(isrc.diaSourceId))
                 print('Unique to dataset 1: {}'.format(int(isrc.diaSourceId)))
                 display(Image(filename=fpath))
 
             for isrc in unique2.itertuples():
-                fpath = cpath2.call(int(isrc.diaSourceId))
+                fpath = cpath2(int(isrc.diaSourceId))
                 print('Unique to dataset 2: {}'.format(int(isrc.diaSourceId)))
                 display(Image(filename=fpath))
 
