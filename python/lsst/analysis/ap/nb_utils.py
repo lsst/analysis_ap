@@ -238,6 +238,11 @@ def compare_sources(butler1, butler2, query1, query2,
 
     # Decide if we are doing anything with cutouts or not. If not, just skip.
     if make_cutouts:
+        # Make paths if they don't exist.
+        if not os.path.exists(cutout_path1):
+            os.makedirs(cutout_path1)
+        if not os.path.exists(cutout_path2):
+            os.makedirs(cutout_path2)
 
         # Make cutouts if they don't already exist
         config = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsConfig()
