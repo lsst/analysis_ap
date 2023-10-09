@@ -163,13 +163,8 @@ def compare_sources(butler1, butler2, query1, query2,
         diaSourceId of the match in the decond dataset.
     """
 
-    if make_cutouts and cutout_path1 is None:
-        errstr = ('You must supply a value for cutout_path1 '
-                  'and cutout_path2 if make_cutouts is True.')
-        raise ValueError(errstr)
-    if make_cutouts and cutout_path2 is None:
-        errstr = ('You must supply a value for cutout_path1 '
-                  'and cutout_path2 if make_cutouts is True.')
+    if make_cutouts is not None and (cutout_path1 is None or cutout_path2 is None):
+        errstr = ('You must supply a value for `cutout_path1` and `cutout_path2` if `make_cutouts` is True.')
         raise ValueError(errstr)
 
     if bad_flag_list is not None:
