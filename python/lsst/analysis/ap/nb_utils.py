@@ -80,13 +80,11 @@ def make_simbad_link(ra, dec, radius_arcsec=3.0):
 
 
 def compare_sources(butler1, butler2, query1, query2,
-                    diffimg_type1='goodSeeingDiff',
-                    diffimg_type2='goodSeeingDiff',
                     bad_flag_list=None, match_radius=0.1,
                     make_cutouts=False, display_cutouts=False,
                     cutout_path1=None, cutout_path2=None,
-                    chunk_size1=None, chunk_size2=None,
-                    add_cutout_metadata=True, njobs=0):
+                    cutout_config1=None, cutout_config2=None,
+                    njobs=0):
     """Compare two APDB datasets by extracting unassociated sources,
     spatially crossmatching, and plotting cutouts of the differences.
 
@@ -106,14 +104,6 @@ def compare_sources(butler1, butler2, query1, query2,
     query2 : `lsst.analysis.ap.DbQuery`
         DbQuery to second APDB (postgresql or slite file;
         NOT created in this function).
-    diffimg_type1 : `str`, optional
-        Type of difference image for cutouts of sources unique to
-        first dataset; typically something like "goodSeeingDiff"
-        or "fakes_goodSeeingDiff"
-    diffimg_type2 : `str`, optional
-        Type of difference image for cutouts of sources unique to
-        second dataset; typically something like "goodSeeingDiff"
-        or "fakes_goodSeeingDiff"
     bad_flag_list : `list`, optional
         List of bad flags to exclude (applied to both query1 and query2).
         Omit list to skip filtering.
@@ -131,22 +121,10 @@ def compare_sources(butler1, butler2, query1, query2,
     cutout_path2 : `str`, optional
         Base path to store cutouts for sources unique to dataset2.
         Must be supplied if make_cutouts is True.
-    chunk_size1 : `int`, optional
-        Chunk size to use for output directories of cutouts unique to
-        dataset 1. If using an existing set of cutouts made with
-        plotImageSubtractionCutouts, be sure to set this value to
-        match what was used when making the set. Then the code will
-        detect the existing files and not attempt to remake them.
-        If not using a preexisting set, this value can be set to
-        any power of 10, or omitted entirely.
-    chunk_size2 : `int`, optional
-        Chunk size to use for output directories of cutouts unique to
-        dataset 2. If using an existing set of cutouts made with
-        plotImageSubtractionCutouts, be sure to set this value to
-        match what was used when making the set. Then the code will
-        detect the existing files and not attempt to remake them.
-        If not using a preexisting set, this value can be set to
-        any power of 10, or omitted entirely.
+    cutout_config1, cutout_config2 : `dict` [`str`], optional
+        Config overrides to apply to cutout plotter for the datasets.
+        See `~plotImageSubtractionCutouts.PlotImageSubtractionCutoutsConfig`
+        for available options.
     njobs : `int`, optional
         Number of parallel processes for plotImageSubtractionCutouts.
 
@@ -244,18 +222,26 @@ def compare_sources(butler1, butler2, query1, query2,
             os.makedirs(cutout_path2)
 
         # Make cutouts if they don't already exist
-        config = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsConfig()
-        config.url_root = ''
-        config.add_metadata = add_cutout_metadata
-        config.diff_image_type = diffimg_type1
+        config1 = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsConfig()
+        config2 = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsConfig()
+        # default to flat directories for ease of use
+        config1.chunk_size = None
+        config2.chunk_size = None
+        # apply user-specified overrides
+        if cutout_config1 is not None:
+            config1.update(**cutout_config1)
+        if cutout_config2 is not None:
+            config2.update(**cutout_config2)
 
         cpath1 = plotImageSubtractionCutouts.CutoutPath(cutout_path1,
-                                                        chunk_size=chunk_size1)
+                                                        chunk_size=config1.chunk_size)
         cpath2 = plotImageSubtractionCutouts.CutoutPath(cutout_path2,
-                                                        chunk_size=chunk_size2)
+                                                        chunk_size=config2.chunk_size)
 
-        pisct = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(
-            output_path=cutout_path1, config=config)
+        plotter1 = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(
+            output_path=cutout_path1, config=config1)
+        plotter2 = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(
+            output_path=cutout_path2, config=config2)
 
         # First figure out which cutouts already exist at the output path
         unique1['pathexists'] = False
@@ -273,13 +259,8 @@ def compare_sources(butler1, butler2, query1, query2,
         pathchk2 = unique2.loc[~unique2['pathexists']]
 
         # Only write those that don't exist yet
-        pisct.write_images(pathchk1, butler=butler1, njobs=njobs)
-
-        # Create a new instance for writing the second set of cutouts
-        config.diff_image_type = diffimg_type2
-        pisct = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(
-            output_path=cutout_path2, config=config)
-        pisct.write_images(pathchk2, butler=butler2, njobs=njobs)
+        plotter1.write_images(pathchk1, butler=butler1, njobs=njobs)
+        plotter2.write_images(pathchk2, butler=butler2, njobs=njobs)
 
         if display_cutouts:
             for isrc in unique1.itertuples():
