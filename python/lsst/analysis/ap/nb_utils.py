@@ -86,7 +86,7 @@ def compare_sources(butler1, butler2, query1, query2,
                     make_cutouts=False, display_cutouts=False,
                     cutout_path1=None, cutout_path2=None,
                     chunk_size1=None, chunk_size2=None,
-                    add_cutout_metadata=True, njobs=1):
+                    add_cutout_metadata=True, njobs=0):
     """Compare two APDB datasets by extracting unassociated sources,
     spatially crossmatching, and plotting cutouts of the differences.
 
