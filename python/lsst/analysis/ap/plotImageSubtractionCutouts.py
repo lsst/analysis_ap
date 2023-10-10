@@ -158,7 +158,7 @@ class PlotImageSubtractionCutoutsConfig(pexConfig.Config):
     add_metadata = pexConfig.Field(
         doc="Annotate the cutouts with catalog metadata, including coordinates, fluxes, flags, etc.",
         dtype=bool,
-        default=False
+        default=True
     )
     chunk_size = pexConfig.Field(
         doc="Chunk up files into subdirectories, with at most this many files per directory."
