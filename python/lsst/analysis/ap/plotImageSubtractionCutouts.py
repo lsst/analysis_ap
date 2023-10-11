@@ -46,7 +46,7 @@ import lsst.pex.exceptions
 import lsst.pipe.base
 import lsst.utils
 
-from . import apdb
+from lsst.analysis.ap import apdb
 
 
 class _ButlerCache:
