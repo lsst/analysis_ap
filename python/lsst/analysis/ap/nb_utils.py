@@ -85,8 +85,8 @@ def compare_sources(butler1, butler2, query1, query2,
                     bad_flag_list=None, match_radius=0.1,
                     make_cutouts=False, display_cutouts=False,
                     cutout_path1=None, cutout_path2=None,
-                    chunk_size=None,
-                    add_cutout_metadata=True, njobs=0):
+                    chunk_size1=None, chunk_size2=None,
+                    add_cutout_metadata=True, njobs=1):
     """Compare two APDB datasets by extracting unassociated sources,
     spatially crossmatching, and plotting cutouts of the differences.
 
@@ -131,9 +131,17 @@ def compare_sources(butler1, butler2, query1, query2,
     cutout_path2 : `str`, optional
         Base path to store cutouts for sources unique to dataset2.
         Must be supplied if make_cutouts is True.
-    chunk_size : `int`, optional
-        Chunk size to use for output directories of cutouts;
-        If using an existing set of cutouts made with
+    chunk_size1 : `int`, optional
+        Chunk size to use for output directories of cutouts unique to
+        dataset 1. If using an existing set of cutouts made with
+        plotImageSubtractionCutouts, be sure to set this value to
+        match what was used when making the set. Then the code will
+        detect the existing files and not attempt to remake them.
+        If not using a preexisting set, this value can be set to
+        any power of 10, or omitted entirely.
+    chunk_size2 : `int`, optional
+        Chunk size to use for output directories of cutouts unique to
+        dataset 2. If using an existing set of cutouts made with
         plotImageSubtractionCutouts, be sure to set this value to
         match what was used when making the set. Then the code will
         detect the existing files and not attempt to remake them.
@@ -155,8 +163,13 @@ def compare_sources(butler1, butler2, query1, query2,
         diaSourceId of the match in the decond dataset.
     """
 
-    if make_cutouts is not None and (cutout_path1 is None or cutout_path2 is None):
-        errstr = ('You must supply a value for `cutout_path1` and `cutout_path2` if `make_cutouts` is True.')
+    if make_cutouts and cutout_path1 is None:
+        errstr = ('You must supply a value for cutout_path1 '
+                  'and cutout_path2 if make_cutouts is True.')
+        raise ValueError(errstr)
+    if make_cutouts and cutout_path2 is None:
+        errstr = ('You must supply a value for cutout_path1 '
+                  'and cutout_path2 if make_cutouts is True.')
         raise ValueError(errstr)
 
     if bad_flag_list is not None:
@@ -230,23 +243,17 @@ def compare_sources(butler1, butler2, query1, query2,
 
     # Decide if we are doing anything with cutouts or not. If not, just skip.
     if make_cutouts:
-        # Make paths if they don't exist.
-        if not os.path.exists(cutout_path1):
-            os.makedirs(cutout_path1)
-        if not os.path.exists(cutout_path2):
-            os.makedirs(cutout_path2)
 
         # Make cutouts if they don't already exist
         config = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsConfig()
         config.url_root = ''
         config.add_metadata = add_cutout_metadata
         config.diff_image_type = diffimg_type1
-        config.chunk_size = chunk_size
 
         cpath1 = plotImageSubtractionCutouts.CutoutPath(cutout_path1,
-                                                        chunk_size=chunk_size)
+                                                        chunk_size=chunk_size1)
         cpath2 = plotImageSubtractionCutouts.CutoutPath(cutout_path2,
-                                                        chunk_size=chunk_size)
+                                                        chunk_size=chunk_size2)
 
         pisct = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(
             output_path=cutout_path1, config=config)
