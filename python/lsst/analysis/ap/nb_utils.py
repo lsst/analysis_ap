@@ -80,7 +80,7 @@ def make_simbad_link(ra, dec, radius_arcsec=3.0):
 
 
 def compare_sources(butler1, butler2, query1, query2,
-                    bad_flag_list=None, match_radius=0.1,
+                    bad_flag_list=None, match_radius=0.5,
                     make_cutouts=False, display_cutouts=False,
                     cutout_path1=None, cutout_path2=None,
                     cutout_config1=None, cutout_config2=None,
