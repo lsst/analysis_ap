@@ -115,11 +115,8 @@ def compare_sources(butler1, butler2, query1, query2,
     display_cutouts: `bool`, optional
         Display cutouts for sources present in only one of the DBs to the
         screen; default is False.
-    cutout_path1 : `str`, optional
-        Base path to store cutouts for sources unique to dataset1.
-        Must be supplied if make_cutouts is True.
-    cutout_path2 : `str`, optional
-        Base path to store cutouts for sources unique to dataset2.
+    cutout_path1, cutout_path2 : `str`, optional
+        Base path to store cutouts for sources unique to the datasets.
         Must be supplied if make_cutouts is True.
     cutout_config1, cutout_config2 : `dict` [`str`], optional
         Config overrides to apply to cutout plotter for the datasets.
