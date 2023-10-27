@@ -90,7 +90,6 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
         self.science, self.scienceCat = dataset.realize(
             noise=1000.0, schema=dataset.makeMinimalSchema()
         )
-        lsst.afw.table.updateSourceCoords(self.science.wcs, self.scienceCat)
         self.template, self.templateCat = dataset.realize(
             noise=5.0, schema=dataset.makeMinimalSchema()
         )
