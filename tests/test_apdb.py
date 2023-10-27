@@ -37,7 +37,7 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         datadir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/")
         apdb_file = os.path.join(datadir, "apdb.sqlite3")
 
-        # TODO: only necessary until we can get detector/visit from APDB
+        # TODO DM-39501: necessary until we can get detector/visit from APDB.
         self.path = tempfile.TemporaryDirectory()
         lsst.daf.butler.Butler.makeRepo(self.path.name)
         butler = lsst.daf.butler.Butler(self.path.name, writeable=True)

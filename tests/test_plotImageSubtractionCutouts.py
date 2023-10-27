@@ -374,19 +374,26 @@ class TestPlotImageSubtractionCutoutsMain(lsst.utils.tests.TestCase):
         self.collection = "mockRun"
         self.outputPath = "/an/output/path"
         self.configFile = os.path.join(datadir, "plotImageSubtractionCutoutsConfig.py")
-        self.instrument = "FakeInstrument"
+        self.instrument = "LATISS"
 
-        def mock_unpacker(_):
-            """A mock unpacked dataId with visit and detector."""
-            return {"visit": 12345, "detector": 42}
-
+        # DM-39501: mock butler, until detector/visit are in APDB.
         butlerPatch = unittest.mock.patch("lsst.daf.butler.Butler")
         self._butler = butlerPatch.start()
-        # mock detector/visit unpacker, until detector/visit are in APDB.
-        self._butler.return_value.registry.dimensions.makePacker.return_value.unpack = (
-            mock_unpacker
-        )
         self.addCleanup(butlerPatch.stop)
+        # DM-39501: mock unpacker, until detector/visit are in APDB.
+        import lsst.obs.lsst
+        universe = lsst.daf.butler.DimensionUniverse()
+        data_id = lsst.daf.butler.DataCoordinate.standardize({"instrument": self.instrument},
+                                                             universe=universe)
+        # ObservationDimensionPacker is harder to use in a butler-less
+        # environment, so we need a temporary dependency on obs_lsst until
+        # this all goes away on DM-39501.
+        packer = lsst.obs.lsst.RubinDimensionPacker(data_id, is_exposure=False)
+        instrumentPatch = unittest.mock.patch.object(lsst.pipe.base.Instrument,
+                                                     "make_default_dimension_packer",
+                                                     return_value=packer)
+        self._instrument = instrumentPatch.start()
+        self.addCleanup(instrumentPatch.stop)
 
     def test_main_args(self):
         """Test typical arguments to main()."""
