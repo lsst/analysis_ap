@@ -148,7 +148,7 @@ class PlotImageSubtractionCutoutsConfig(pexConfig.Config):
         doc="Dataset type of template and difference image to use for cutouts; "
             "Will have '_templateExp' and '_differenceExp' appended for butler.get(), respectively.",
         dtype=str,
-        default="deepDiff",
+        default="goodSeeingDiff",
     )
     science_image_type = pexConfig.Field(
         doc="Dataset type of science image to use for cutouts.",
@@ -158,7 +158,7 @@ class PlotImageSubtractionCutoutsConfig(pexConfig.Config):
     add_metadata = pexConfig.Field(
         doc="Annotate the cutouts with catalog metadata, including coordinates, fluxes, flags, etc.",
         dtype=bool,
-        default=False
+        default=True
     )
     chunk_size = pexConfig.Field(
         doc="Chunk up files into subdirectories, with at most this many files per directory."
