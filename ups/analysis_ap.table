@@ -14,8 +14,6 @@ setupRequired(utils)
 setupRequired(analysis_tools)
 setupRequired(ap_association)
 
-# TODO DM-39501: to make a test repo, until detector/visit are in APDB.
-setupOptional(obs_decam)
 # TODO: DM-39501: to mock a dimension packer, until detector/visit are in APDB.
 setupOptional(obs_lsst)
 
