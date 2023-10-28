@@ -179,6 +179,9 @@ class DbQuery(abc.ABC):
         query = table.select().where(table.columns["diaSourceId"] == id)
         with self.connection as connection:
             result = pd.read_sql_query(query, connection)
+        if len(result) == 0:
+            raise RuntimeError(f"diaSourceId={id} not found in DiaSource table")
+
         self._fill_from_ccdVisitId(result)
         return result.iloc[0]
 
@@ -231,6 +234,9 @@ class DbQuery(abc.ABC):
         query = query.where(table.columns["diaObjectId"] == id)
         with self.connection as connection:
             result = pd.read_sql_query(query, connection)
+        if len(result) == 0:
+            raise RuntimeError(f"diaObjectId={id} not found in DiaObject table")
+
         return result.iloc[0]
 
     def load_objects(self, limit=100000, latest=True):
@@ -278,6 +284,9 @@ class DbQuery(abc.ABC):
         query = table.select().where(table.columns["diaForcedSourceId"] == id)
         with self.connection as connection:
             result = pd.read_sql_query(query, connection)
+        if len(result) == 0:
+            raise RuntimeError(f"diaForcedSourceId={id} not found in DiaForcedSource table")
+
         self._fill_from_ccdVisitId(result)
         return result.iloc[0]
 

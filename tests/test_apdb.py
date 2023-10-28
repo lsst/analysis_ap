@@ -113,17 +113,26 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         self.assertEqual(result['diaObjectId'], 506428274000265709)
         self.assertEqual(result['flags'], 8388608)
 
+        with self.assertRaisesRegex(RuntimeError, "diaSourceId=54321 not found"):
+            self.apdb.load_source(54321)
+
     def test_load_object(self):
         result = self.apdb.load_object(506428274000265714)
         # spot check a few fields
         self.assertEqual(result['diaObjectId'], 506428274000265714)
         self.assertFloatsAlmostEqual(result['ra'], 55.7302576718241, rtol=1e-15)
 
+        with self.assertRaisesRegex(RuntimeError, "diaObjectId=54321 not found"):
+            self.apdb.load_object(54321)
+
     def test_load_forced_source(self):
         result = self.apdb.load_forced_source(506428274000265224)
         # spot check a few fields
         self.assertEqual(result['diaForcedSourceId'], 506428274000265224)
         self.assertEqual(result['diaObjectId'], 506428274000265713)
+
+        with self.assertRaisesRegex(RuntimeError, "diaForcedSourceId=54321 not found"):
+            self.apdb.load_forced_source(54321)
 
     def test_make_flag_exclusion_clause(self):
         # test clause generation with default flag list
