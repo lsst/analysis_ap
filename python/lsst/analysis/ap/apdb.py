@@ -364,7 +364,11 @@ class ApdbSqliteQuery(DbQuery):
 
     def __init__(self, filename, *, butler, instrument, **kwargs):
         super().__init__(butler=butler, instrument=instrument, **kwargs)
-        self._engine = sqlalchemy.create_engine(f"sqlite:///{filename}")
+        # For sqlite, use a larger pool and a faster timeout, to allow many
+        # repeat transactions with the same connection, as transactions on
+        # our sqlite DBs should be small and fast.
+        self._engine = sqlalchemy.create_engine(f"sqlite:///{filename}",
+                                                pool_timeout=5, pool_size=200)
 
         with self.connection as connection:
             metadata = sqlalchemy.MetaData()
