@@ -49,16 +49,16 @@ DATA = pd.DataFrame(
         "detector": [50, 60],
         "visit": [1234, 5678],
         "instrument": ["TestMock", "TestMock"],
-        "filterName": ['r', 'g'],
-        "psFlux": [1234.5, 1234.5],
-        "psFluxErr": [123.5, 123.5],
+        "band": ['r', 'g'],
+        "psfFlux": [1234.5, 1234.5],
+        "psfFluxErr": [123.5, 123.5],
         "snr": [10.0, 11.0],
-        "psChi2": [40.0, 50.0],
-        "psNdata": [10, 100],
+        "psfChi2": [40.0, 50.0],
+        "psfNdata": [10, 100],
         "apFlux": [2222.5, 3333.4],
         "apFluxErr": [222.5, 333.4],
-        "totFlux": [2222000.5, 33330000.4],
-        "totFluxErr": [22200.5, 333000.4],
+        "scienceFlux": [2222000.5, 33330000.4],
+        "scienceFluxErr": [22200.5, 333000.4],
         "isDipole": [True, False],
         # all flags vs. no flags
         "flags": [~0, 0],
@@ -490,9 +490,9 @@ class TestPlotImageSubtractionCutoutsMain(lsst.utils.tests.TestCase):
             )
             self.assertIsInstance(write_images.call_args.args[1], pd.DataFrame)
             self.assertEqual(write_images.call_args.args[2], self._butler.return_value)
-            # The test apdb contains 15 sources, so we get the return of
-            # `write_images` three times with `limit=5`
-            self.assertEqual(write_manifest.call_args.args[1], [5, 5, 5])
+            # The test apdb contains 499 sources, so we get the return of
+            # `write_images` (enforced as `5` above) 100 times.
+            self.assertEqual(write_manifest.call_args.args[1], 100*[5])
 
     @unittest.skip("Mock and multiprocess don't mix: https://github.com/python/cpython/issues/100090")
     def test_main_args_multiprocessing(self):
