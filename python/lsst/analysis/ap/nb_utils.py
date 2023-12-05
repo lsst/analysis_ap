@@ -30,7 +30,7 @@ import pandas as pd
 import numpy as np
 
 from lsst.analysis.ap import plotImageSubtractionCutouts
-from IPython.display import display, Image
+from IPython.display import display, Image, Markdown
 
 
 def make_simbad_link(ra, dec, radius_arcsec=3.0):
@@ -53,9 +53,6 @@ def make_simbad_link(ra, dec, radius_arcsec=3.0):
     results_table : `astropy.table.table.Table`
         A table of Simbad search results.
     """
-    # IPython is not in the base conda env, so hide the import here.
-    from IPython.display import display, Markdown
-
     search_results = f"http://simbad.cds.unistra.fr/simbad/sim-coo?Coord={ra}+{dec}" \
                      f"&CooFrame=FK5&CooEpoch=2000&CooEqui=2000&CooDefinedFrames=none&Radius=" \
                      f"{radius_arcsec}&Radius.unit=arcsec&submit=submit+query&CoordList="
