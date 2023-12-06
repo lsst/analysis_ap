@@ -73,6 +73,12 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         self.assertEqual(len(result), 2)
         self.assertEqual(result['diaSourceId'][0], 506428274000265761)
 
+    def test_load_forced_sources_for_object(self):
+        result = self.apdb.load_forced_sources_for_object(506428274000265761)
+        # This test APDB has up to two forced sources per object.
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result['diaForcedSourceId'][0], 506428274000265272)
+
     def test_load_sources_for_object_exclude_flags(self):
         # diaObjectId chosen from inspection to have flagged diaSources
         result = self.apdb.load_sources_for_object(506428274000265784)

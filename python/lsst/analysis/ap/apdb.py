@@ -162,6 +162,36 @@ class DbQuery(abc.ABC):
         self._fill_from_ccdVisitId(result)
         return result
 
+    def load_forced_sources_for_object(self, dia_object_id, exclude_flagged=False, limit=100000):
+        """Load diaForcedSources for a single diaObject.
+
+        Parameters
+        ----------
+        dia_object_id : `int`
+            Id of object to load sources for.
+        exclude_flagged : `bool`, optional
+            Exclude sources that have selected flags set.
+            Use `set_excluded_diaSource_flags` to configure which flags
+            are excluded.
+        limit : `int`
+            Maximum number of rows to return.
+
+        Returns
+        -------
+        data : `pandas.DataFrame`
+            A data frame of diaSources for the specified diaObject.
+        """
+        table = self._tables["DiaForcedSource"]
+        query = table.select().where(table.columns["diaObjectId"] == dia_object_id)
+        if exclude_flagged:
+            query = self._make_flag_exclusion_query(query, table, self.diaSource_flags_exclude)
+        query = query.order_by(table.columns["ccdVisitId"], table.columns["diaForcedSourceId"])
+        with self.connection as connection:
+            result = pd.read_sql_query(query, connection)
+
+        self._fill_from_ccdVisitId(result)
+        return result
+
     def load_source(self, id):
         """Load one diaSource.
 
