@@ -269,16 +269,19 @@ class DbQuery(abc.ABC):
 
         return result.iloc[0]
 
-    def load_objects(self, limit=100000, latest=True):
+    def load_objects(self, limit=100000, latest=True, min_sources=None):
         """Load all diaObjects.
 
         Parameters
         ----------
         limit : `int`
             Maximum number of rows to return.
-        latest : `bool`
+        latest : `bool`, optional
             Only load diaObjects where validityEnd is None.
             These are the most-recently updated diaObjects.
+        min_sources : `int`, optional
+            Restrict to diaObjects that have at least this many sources
+            (nDiaSources > min_sources).
 
         Returns
         -------
@@ -288,6 +291,8 @@ class DbQuery(abc.ABC):
         table = self._tables["DiaObject"]
         if latest:
             query = table.select().where(table.columns["validityEnd"] == None)  # noqa: E711
+        if min_sources is not None:
+            query = query.where(table.columns["nDiaSources"] > min_sources)  # noqa: E711
         query = query.order_by(table.columns["diaObjectId"])
         if limit is not None:
             query = query.limit(limit)
