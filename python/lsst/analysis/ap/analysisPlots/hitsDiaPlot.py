@@ -23,10 +23,10 @@ __all__ = ("HitsDiaPlot",)
 
 from lsst.analysis.tools.actions.plot.diaSkyPlot import DiaSkyPanel, DiaSkyPlot
 from lsst.analysis.tools.actions.vector import DownselectVector, RangeSelector
-from lsst.analysis.tools.interfaces import AnalysisPlot
+from lsst.analysis.tools.interfaces import PlotAction
 
 
-class HitsDiaPlot(AnalysisPlot):
+class HitsDiaPlot(PlotAction):
     """Specialized plotter for the DECam HiTS dataset
     for plotting RA/Dec of DiaSources.
 
