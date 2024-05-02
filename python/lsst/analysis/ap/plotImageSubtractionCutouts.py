@@ -529,8 +529,6 @@ def _annotate_image(fig, source, flags, len_sizes):
     flags_bad = ["base_PixelFlags_flag_bad"]
     flags_suspect = ["base_PixelFlags_flag_suspect", "base_PixelFlags_flag_suspectCenter"]
     flags_centroid = ["slot_Centroid_flag"]
-    flags_centroid_pos = ["slot_Centroid_pos_flag"]
-    flags_centroid_neg = ["slot_Centroid_neg_flag"]
     flags_shape = ["slot_Shape_flag", "slot_Shape_flag_no_pixels", "slot_Shape_flag_not_contained",
                    "slot_Shape_flag_parent_source"]
 
@@ -593,12 +591,10 @@ def _annotate_image(fig, source, flags, len_sizes):
         fig.text(0.55, heights[3], "SUS", color="goldenrod", fontweight="bold")
     if any(flags[flags_centroid]):
         fig.text(0.60, heights[3], "CENTROID", color="red", fontweight="bold")
-    if any(flags[flags_centroid_pos]):
-        fig.text(0.73, heights[3], "CEN+", color="chocolate", fontweight="bold")
-    if any(flags[flags_centroid_neg]):
-        fig.text(0.80, heights[3], "CEN-", color="blue", fontweight="bold")
     if any(flags[flags_shape]):
-        fig.text(0.87, heights[3], "SHAPE", color="red", fontweight="bold")
+        fig.text(0.73, heights[3], "SHAPE", color="red", fontweight="bold")
+    # Future option: to add two more flag flavors to the legend,
+    # use locations 0.80 and 0.87
 
     # rb score
     if source['reliability'] is not None and np.isfinite(source['reliability']):
