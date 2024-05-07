@@ -1,12 +1,18 @@
 description: |
   Tier 1 AP plots and metrics to assess quality on a DECam HiTS rerun
+  Based on analysis_tools/pipelines/apDetectorVisitQualityCore.yaml
 tasks:
-  analyzeDiaSourceTableCore:
-    class: lsst.analysis.tools.tasks.DiaSourceTableCcdVisitAnalysisTask
+  analyzeAssocDiaSrcCore:
+    class: lsst.analysis.tools.tasks.AssocDiaSrcDetectorVisitAnalysisTask
     config:
-      metrics.numSsObjects: NumSsObjectsMetric
-      connections.outputName: diaSourceTableCore
-      plots.hitsDiaPlot: HitsDiaPlot
+      # atools.numDiaSources: NumDiaSourcesMetric
+      atools.numDiaSourcesAll: NumDiaSourcesSelectionMetric
+      atools.numDiaSourcesAll.metricName: numDiaSourcesAll
+      atools.numDiaSourcesAll.process.calculateActions.countingAction.vectorKey: diaSourceId
+      atools.numDipoles: NumDipolesMetric
+      atools.numSsObjects: NumSsObjectsMetric
+      atools.hitsDiaPlot: HitsDiaPlot  # this is the special analysis_ap plot
+      connections.outputName: assocDiaSrcCore
       python: |
-        from lsst.analysis.tools.analysisMetrics import *
+        from lsst.analysis.tools.atools import *
         from lsst.analysis.ap.analysisPlots import *

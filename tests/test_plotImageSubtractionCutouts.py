@@ -230,7 +230,7 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
             # size (in inches) and the dpi (default=100), plus borders.
             self.assertEqual((im.height, im.width), (576, 645))
 
-    def test_generate_image_invalid_paramters(self):
+    def test_generate_image_invalid_parameters(self):
         cutouts = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(output_path="")
         with self.assertRaisesRegex(RuntimeError, "Must pass both"):
             cutouts.generate_image(self.science,
@@ -490,9 +490,9 @@ class TestPlotImageSubtractionCutoutsMain(lsst.utils.tests.TestCase):
             )
             self.assertIsInstance(write_images.call_args.args[1], pd.DataFrame)
             self.assertEqual(write_images.call_args.args[2], self._butler.return_value)
-            # The test apdb contains 499 sources, so we get the return of
-            # `write_images` (enforced as `5` above) 100 times.
-            self.assertEqual(write_manifest.call_args.args[1], 100*[5])
+            # The test apdb contains 290 DiaSources, so we get the return of
+            # `write_images` (enforced as `5` above) 58 times.
+            self.assertEqual(write_manifest.call_args.args[1], 58*[5])
 
     @unittest.skip("Mock and multiprocess don't mix: https://github.com/python/cpython/issues/100090")
     def test_main_args_multiprocessing(self):

@@ -50,12 +50,10 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
 
     def test_load_sources(self):
         result = self.apdb.load_sources(limit=None)
-        self.assertEqual(len(result), 499)
+        self.assertEqual(len(result), 290)
         # spot check a few fields
-        self.assertEqual(result['diaSourceId'][0], 506428274000265706)
-        self.assertTrue(all(result['ccdVisitId'][:297] == 943296168))
-        self.assertTrue(all(result['ccdVisitId'][297:] == 982985164))
-        self.assertEqual(result['diaObjectId'][14], 506428274000265720)
+        self.assertEqual(result['diaSourceId'][0], 506428274000265217)
+        self.assertEqual(result['diaObjectId'][14], 506428274000265241)
         self.assertEqual(result['detector'][0], 168)
         self.assertEqual(result['visit'][0], 943296)
 
@@ -65,36 +63,39 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
 
     def test_load_sources_exclude_flags(self):
         result = self.apdb.load_sources(exclude_flagged=True)
-        self.assertEqual(len(result), 415)
+        self.assertEqual(len(result), 271)
 
     def test_load_sources_for_object(self):
-        result = self.apdb.load_sources_for_object(506428274000265761)
-        # This test APDB has up to two sources per object.
+        # Test that we load one specific diaObject and 1 of its 2 diaSources
+        result = self.apdb.load_sources_for_object(506428274000265388)
         self.assertEqual(len(result), 2)
-        self.assertEqual(result['diaSourceId'][0], 506428274000265761)
+        self.assertEqual(result['diaSourceId'][0], 506428274000265388)
 
     def test_load_forced_sources_for_object(self):
-        result = self.apdb.load_forced_sources_for_object(506428274000265761)
-        # This test APDB has up to two forced sources per object.
+        # Test that we can load the same diaObject
+        # This diaObject was found to have 2 constituent diaForcedSources
+        result = self.apdb.load_forced_sources_for_object(506428274000265388)
         self.assertEqual(len(result), 2)
-        self.assertEqual(result['diaForcedSourceId'][0], 506428274000265272)
+        self.assertEqual(result['diaForcedSourceId'][0], 506428274000265354)
 
     def test_load_sources_for_object_exclude_flags(self):
-        # diaObjectId chosen from inspection to have flagged diaSources
-        result = self.apdb.load_sources_for_object(506428274000265784)
+        # diaObject chosen from inspection to have 2 flagged diaSources
+        result = self.apdb.load_sources_for_object(506428274000265285)
         self.assertEqual(len(result), 2)
-        self.assertEqual(result['diaSourceId'][0], 506428274000265784)
-
-        result = self.apdb.load_sources_for_object(506428274000265784,
+        self.assertEqual(result['diaSourceId'][0], 506428274000265285)
+        self.assertEqual(result['diaSourceId'][1], 527736141479149663)
+        # This same diaObject has `diaSource_flags_exclude` flags
+        # on all 2 of its diaSources
+        result = self.apdb.load_sources_for_object(506428274000265285,
                                                    exclude_flagged=True)
         self.assertEqual(len(result), 0)
 
     def test_load_objects(self):
         result = self.apdb.load_objects(limit=None)
-        self.assertEqual(len(result), 436)
+        self.assertEqual(len(result), 259)
         # spot check a few fields
         self.assertNotIn("diaSourceId", result)
-        self.assertEqual(result['diaObjectId'][0], 506428274000265706)
+        self.assertEqual(result['diaObjectId'][0], 506428274000265217)
         self.assertIn("validityStart", result.columns)
 
         result = self.apdb.load_objects(limit=2)
@@ -102,9 +103,9 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
 
     def test_load_forced_sources(self):
         result = self.apdb.load_forced_sources(limit=None)
-        self.assertEqual(len(result), 653)
+        self.assertEqual(len(result), 376)
         # spot check a few fields
-        self.assertEqual(result['diaObjectId'][0], 506428274000265706)
+        self.assertEqual(result['diaObjectId'][0], 506428274000265217)
         self.assertEqual(result['diaForcedSourceId'][0], 506428274000265217)
         self.assertEqual(result['detector'][0], 168)
         self.assertEqual(result['visit'][0], 943296)
@@ -113,20 +114,21 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         self.assertEqual(len(result), 2)
 
     def test_load_source(self):
-        result = self.apdb.load_source(506428274000265709)
+        result = self.apdb.load_source(506428274000265217)
         # spot check a few fields
-        self.assertEqual(result['diaSourceId'], 506428274000265709)
-        self.assertEqual(result['diaObjectId'], 506428274000265709)
+        self.assertEqual(result['diaSourceId'], 506428274000265217)
+        self.assertEqual(result['diaObjectId'], 506428274000265217)
         self.assertEqual(result['flags'], 8388608)
+        self.assertEqual(result['band'], 'r')
 
         with self.assertRaisesRegex(RuntimeError, "diaSourceId=54321 not found"):
             self.apdb.load_source(54321)
 
     def test_load_object(self):
-        result = self.apdb.load_object(506428274000265714)
+        result = self.apdb.load_object(506428274000265228)
         # spot check a few fields
-        self.assertEqual(result['diaObjectId'], 506428274000265714)
-        self.assertFloatsAlmostEqual(result['ra'], 55.7302576718241, rtol=1e-15)
+        self.assertEqual(result['diaObjectId'], 506428274000265228)
+        self.assertFloatsAlmostEqual(result['ra'], 55.7887299103902, rtol=1e-15)
 
         with self.assertRaisesRegex(RuntimeError, "diaObjectId=54321 not found"):
             self.apdb.load_object(54321)
@@ -135,7 +137,7 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         result = self.apdb.load_forced_source(506428274000265224)
         # spot check a few fields
         self.assertEqual(result['diaForcedSourceId'], 506428274000265224)
-        self.assertEqual(result['diaObjectId'], 506428274000265713)
+        self.assertEqual(result['diaObjectId'], 506428274000265228)
 
         with self.assertRaisesRegex(RuntimeError, "diaForcedSourceId=54321 not found"):
             self.apdb.load_forced_source(54321)
