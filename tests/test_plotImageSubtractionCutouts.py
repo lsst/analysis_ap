@@ -28,7 +28,6 @@ import unittest
 import pandas as pd
 import PIL
 
-from lsst.ap.association import UnpackApdbFlags
 import lsst.afw.table
 import lsst.geom
 from lsst.meas.algorithms import SourceDetectionTask
@@ -60,9 +59,31 @@ DATA = pd.DataFrame(
         "scienceFlux": [2222000.5, 33330000.4],
         "scienceFluxErr": [22200.5, 333000.4],
         "isDipole": [True, False],
-        # all flags vs. no flags
-        "flags": [~0, 0],
         "reliability": [0, 1.0],
+        # First diaSource has all flags set, and second diaSource has none
+        "slot_PsfFlux_flag": [1, 0],
+        "slot_PsfFlux_flag_noGoodPixels": [1, 0],
+        "slot_PsfFlux_flag_edge": [1, 0],
+        "slot_ApFlux_flag": [1, 0],
+        "slot_ApFlux_flag_apertureTruncated": [1, 0],
+        "ip_diffim_forced_PsfFlux_flag": [1, 0],
+        "ip_diffim_forced_PsfFlux_flag_noGoodPixels": [1, 0],
+        "ip_diffim_forced_PsfFlux_flag_edge": [1, 0],
+        "pixelFlags_edge": [1, 0],
+        "pixelFlags_interpolated": [1, 0],
+        "pixelFlags_interpolatedCenter": [1, 0],
+        "pixelFlags_saturated": [1, 0],
+        "pixelFlags_saturatedCenter": [1, 0],
+        "pixelFlags_cr": [1, 0],
+        "pixelFlags_crCenter": [1, 0],
+        "pixelFlags_bad": [1, 0],
+        "pixelFlags_suspect": [1, 0],
+        "pixelFlags_suspectCenter": [1, 0],
+        "slot_Centroid_flag": [1, 0],
+        "slot_Shape_flag": [1, 0],
+        "slot_Shape_flag_no_pixels": [1, 0],
+        "slot_Shape_flag_not_contained": [1, 0],
+        "slot_Shape_flag_parent_source": [1, 0],
     }
 )
 
@@ -96,10 +117,6 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
         # A simple image difference to have something to plot.
         self.difference = lsst.afw.image.ExposureF(self.science, deep=True)
         self.difference.image -= self.template.image
-
-        flag_map = os.path.join(lsst.utils.getPackageDir("ap_association"), "data/association-flag-map.yaml")
-        unpacker = UnpackApdbFlags(flag_map, "DiaSource")
-        self.flags = unpacker.unpack(DATA["flags"], "flags")
 
     def test_generate_image(self):
         """Test that we get some kind of image out.
@@ -149,8 +166,7 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
                                         self.difference,
                                         skyCenter,
                                         self.scale,
-                                        source=DATA.iloc[0],
-                                        flags=self.flags[0])
+                                        source=DATA.iloc[0])
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
             # im.show()
@@ -164,8 +180,7 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
                                         self.difference,
                                         skyCenter,
                                         self.scale,
-                                        source=DATA.iloc[1],
-                                        flags=self.flags[1])
+                                        source=DATA.iloc[1])
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
             # im.show()
@@ -206,8 +221,7 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
                                         self.difference,
                                         skyCenter,
                                         self.scale,
-                                        source=DATA.iloc[0],
-                                        flags=self.flags[0])
+                                        source=DATA.iloc[0])
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
             # im.show()
@@ -221,33 +235,13 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
                                         self.difference,
                                         skyCenter,
                                         self.scale,
-                                        source=DATA.iloc[1],
-                                        flags=self.flags[1])
+                                        source=DATA.iloc[1])
         with PIL.Image.open(cutout) as im:
             # NOTE: uncomment this to show the resulting image.
             # im.show()
             # NOTE: the dimensions here are determined by the matplotlib figure
             # size (in inches) and the dpi (default=100), plus borders.
             self.assertEqual((im.height, im.width), (576, 645))
-
-    def test_generate_image_invalid_parameters(self):
-        cutouts = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(output_path="")
-        with self.assertRaisesRegex(RuntimeError, "Must pass both"):
-            cutouts.generate_image(self.science,
-                                   self.template,
-                                   self.difference,
-                                   skyCenter,
-                                   self.scale,
-                                   source=DATA.iloc[1],
-                                   flags=None)
-        with self.assertRaisesRegex(RuntimeError, "Must pass both"):
-            cutouts.generate_image(self.science,
-                                   self.template,
-                                   self.difference,
-                                   skyCenter,
-                                   self.scale,
-                                   source=None,
-                                   flags=self.flags[1])
 
     def test_write_images(self):
         """Test that images get written to a temporary directory."""

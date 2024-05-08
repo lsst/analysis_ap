@@ -27,15 +27,15 @@ __all__ = ["DbQuery", "ApdbSqliteQuery", "ApdbPostgresQuery"]
 import os
 import abc
 import contextlib
-import warnings
+import tempfile
 
 import pandas as pd
 import sqlalchemy
+from sqlalchemy import or_, true
 import numpy as np
 
-import lsst.utils
-from lsst.ap.association import UnpackApdbFlags
 from lsst.pipe.base import Instrument
+from lsst.dax.apdb import Apdb, ApdbSql, ApdbTables
 
 
 class DbQuery(abc.ABC):
@@ -58,17 +58,12 @@ class DbQuery(abc.ABC):
     def __init__(self, *, butler, instrument):
         self._butler = butler
         self._instrument = instrument
-
-        flag_map = os.path.join(lsst.utils.getPackageDir("ap_association"),
-                                "data/association-flag-map.yaml")
-        self._unpacker = UnpackApdbFlags(flag_map, "DiaSource")
-
-        self.set_excluded_diaSource_flags(['base_PixelFlags_flag_bad',
-                                           'base_PixelFlags_flag_suspect',
-                                           'base_PixelFlags_flag_saturatedCenter',
-                                           'base_PixelFlags_flag_interpolated',
-                                           'base_PixelFlags_flag_interpolatedCenter',
-                                           'base_PixelFlags_flag_edge',
+        self.set_excluded_diaSource_flags(['pixelFlags_bad',
+                                           'pixelFlags_suspect',
+                                           'pixelFlags_saturatedCenter',
+                                           'pixelFlags_interpolated',
+                                           'pixelFlags_interpolatedCenter',
+                                           'pixelFlags_edge',
                                            ])
 
     @property
@@ -98,14 +93,13 @@ class DbQuery(abc.ABC):
         flag_list : `list` [`str`]
             Flag names to exclude.
         """
-
         for flag in flag_list:
-            if not self._unpacker.flagExists(flag, columnName='flags'):
+            if flag not in self._tables["DiaSource"].columns:
                 raise ValueError(f"flag {flag} not included in DiaSource flags")
 
         self.diaSource_flags_exclude = flag_list
 
-    def _make_flag_exclusion_query(self, query, table, flag_list, column_name='flags'):
+    def _make_flag_exclusion_query(self, query, table, flag_list):
         """Return an SQL where query that excludes sources with chosen flags.
 
         Parameters
@@ -116,21 +110,17 @@ class DbQuery(abc.ABC):
             Query to include the where statement in.
         table : `sqlalchemy.schema.Table`
             Table containing the column to be queried.
-        column_name : `str`, optional
-            Name of flag column to query.
 
         Returns
         -------
-        clause : `str`
-            Clause to include in the SQL where statement.
+        query : `sqlalchemy.sql.Query`
+            Query that selects rows to exclude based on flags.
         """
-
-        bitmask = int(self._unpacker.makeFlagBitMask(flag_list, columnName=column_name))
-
-        if bitmask == 0:
-            warnings.warn(f"Flag bitmask is zero. Supplied flags: {flag_list}", RuntimeWarning)
-
-        return query.where(table.columns[column_name].op("&")(bitmask) == 0)
+        # Build a query that selects any source with one or more chosen flags,
+        # and return the opposite (`not_`) of that query.
+        query = query.where(sqlalchemy.not_(sqlalchemy.or_(table.columns[flag_col] == 1
+                                            for flag_col in flag_list)))
+        return query
 
     def load_sources_for_object(self, dia_object_id, exclude_flagged=False, limit=100000):
         """Load diaSources for a single diaObject.

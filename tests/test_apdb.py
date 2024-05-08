@@ -62,6 +62,8 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         self.assertEqual(len(result), 2)
 
     def test_load_sources_exclude_flags(self):
+        # Test that we load the expected number of diaSources.
+        # (There are 19 diaSources of the 290 that should be excluded.)
         result = self.apdb.load_sources(exclude_flagged=True)
         self.assertEqual(len(result), 271)
 
@@ -118,7 +120,6 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         # spot check a few fields
         self.assertEqual(result['diaSourceId'], 506428274000265217)
         self.assertEqual(result['diaObjectId'], 506428274000265217)
-        self.assertEqual(result['flags'], 8388608)
         self.assertEqual(result['band'], 'r')
 
         with self.assertRaisesRegex(RuntimeError, "diaSourceId=54321 not found"):
@@ -143,26 +144,32 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
             self.apdb.load_forced_source(54321)
 
     def test_make_flag_exclusion_clause(self):
-        # test clause generation with default flag list
+        # Test clause generation with default flag list.
         table = self.apdb._tables["DiaSource"]
         query = table.select()
         query = self.apdb._make_flag_exclusion_query(query, table, self.apdb.diaSource_flags_exclude)
+        # Check that the SQL query literal string does the flag exclusion.
+        queryString = ('NOT ("DiaSource"."pixelFlags_bad" = 1 '
+                       'OR "DiaSource"."pixelFlags_suspect" = 1 '
+                       'OR "DiaSource"."pixelFlags_saturatedCenter" = 1 '
+                       'OR "DiaSource"."pixelFlags_interpolated" = 1 '
+                       'OR "DiaSource"."pixelFlags_interpolatedCenter" = 1 '
+                       'OR "DiaSource"."pixelFlags_edge" = 1)')
         self.assertEqual(str(query.whereclause.compile(compile_kwargs={"literal_binds": True})),
-                         '("DiaSource".flags & 972) = 0')
-
-        with self.assertWarnsRegex(RuntimeWarning, "Flag bitmask is zero."):
-            query = self.apdb._make_flag_exclusion_query(query, table, [])
+                         queryString)
 
     def test_set_excluded_diaSource_flags(self):
         with self.assertRaisesRegex(ValueError, "flag not a real flag not included"):
             self.apdb.set_excluded_diaSource_flags(['not a real flag'])
 
-        self.apdb.set_excluded_diaSource_flags(['base_PixelFlags_flag'])
+        self.apdb.set_excluded_diaSource_flags(['pixelFlags_streak'])
         table = self.apdb._tables["DiaSource"]
         query = table.select()
         query = self.apdb._make_flag_exclusion_query(query, table, self.apdb.diaSource_flags_exclude)
+        # Check that the SQL query does a non-default flag exclusion.
+        queryString = '"DiaSource"."pixelFlags_streak" != 1'
         self.assertEqual(str(query.whereclause.compile(compile_kwargs={"literal_binds": True})),
-                         '("DiaSource".flags & 1) = 0')
+                         queryString)
 
     def test_fill_from_ccdVisitId(self):
         # an empty series should be unchanged
