@@ -752,13 +752,11 @@ def build_argparser():
     return parser
 
 
-def _make_apdbQuery(butler, instrument, sqlitefile=None, postgres_url=None, namespace=None):
+def _make_apdbQuery(instrument, sqlitefile=None, postgres_url=None, namespace=None):
     """Return a query connection to the specified APDB.
 
     Parameters
     ----------
-    butler : `lsst.daf.butler.Butler`
-        Butler to read detector/visit information from.
     instrument : `lsst.obs.base.Instrument`
         Instrument associated with this data, to get detector/visit data.
     sqlitefile : `str`, optional
@@ -779,9 +777,9 @@ def _make_apdbQuery(butler, instrument, sqlitefile=None, postgres_url=None, name
         Raised if the APDB connection kwargs are invalid in some way.
     """
     if sqlitefile is not None:
-        apdb_query = apdb.ApdbSqliteQuery(sqlitefile, butler=butler, instrument=instrument)
+        apdb_query = apdb.ApdbSqliteQuery(sqlitefile, instrument=instrument)
     elif postgres_url is not None and namespace is not None:
-        apdb_query = apdb.ApdbPostgresQuery(namespace, postgres_url, butler=butler, instrument=instrument)
+        apdb_query = apdb.ApdbPostgresQuery(namespace, postgres_url, instrument=instrument)
     else:
         raise RuntimeError("Cannot handle database connection args: "
                            f"sqlitefile={sqlitefile}, postgres_url={postgres_url}, namespace={namespace}")
@@ -862,8 +860,7 @@ def run_cutouts(args):
     )
 
     butler = lsst.daf.butler.Butler(args.repo, collections=args.collections)
-    apdb_query = _make_apdbQuery(butler,
-                                 args.instrument,
+    apdb_query = _make_apdbQuery(args.instrument,
                                  sqlitefile=args.sqlitefile,
                                  postgres_url=args.postgres_url,
                                  namespace=args.namespace)

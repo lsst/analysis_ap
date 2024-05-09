@@ -24,18 +24,11 @@
 
 __all__ = ["DbQuery", "ApdbSqliteQuery", "ApdbPostgresQuery"]
 
-import os
 import abc
 import contextlib
-import tempfile
 
 import pandas as pd
 import sqlalchemy
-from sqlalchemy import or_, true
-import numpy as np
-
-from lsst.pipe.base import Instrument
-from lsst.dax.apdb import Apdb, ApdbSql, ApdbTables
 
 
 class DbQuery(abc.ABC):
@@ -46,17 +39,16 @@ class DbQuery(abc.ABC):
 
     Parameters
     ----------
-    butler : `lsst.daf.butler.Butler`
-        Butler to unpack detector/visit from ccdVisitId.
-        To be deprecated once this information is in the database.
     instrument : `str`
         Short name (e.g. "DECam") of instrument to make a dataId unpacker
         and to add to the table columns; supports any gen3 instrument.
         To be deprecated once this information is in the database.
     """
 
-    def __init__(self, *, butler, instrument):
-        self._butler = butler
+    def __init__(self, instrument=None):
+        if not instrument:
+            raise RuntimeError("Instrument is required until DM-39502, "
+                               "when it will be part of the APDB metadata.")
         self._instrument = instrument
         self.set_excluded_diaSource_flags(['pixelFlags_bad',
                                            'pixelFlags_suspect',
@@ -335,8 +327,8 @@ class DbQuery(abc.ABC):
         return result
 
     def _fill_from_ccdVisitId(self, diaSources):
-        """Expand the ccdVisitId value in the database.
-        This method is temporary, until the CcdVisit table is filled out.
+        """Add instrument to the database.
+        This method is temporary, until APDB has instrument in its metadata.
 
         Parameters
         ----------
@@ -346,18 +338,7 @@ class DbQuery(abc.ABC):
         # do nothing for an empty series
         if len(diaSources) == 0:
             return
-        instrumentDataId = self._butler.registry.expandDataId(instrument=self._instrument)
-        packer = Instrument.make_default_dimension_packer(data_id=instrumentDataId,
-                                                          is_exposure=False)
 
-        tempvisit = np.zeros(len(diaSources), dtype=np.int64)
-        tempdetector = np.zeros(len(diaSources), dtype=np.int64)
-        for i, ccdVisitId in enumerate(diaSources.ccdVisitId):
-            dataId = packer.unpack(ccdVisitId)
-            tempvisit[i] = dataId['visit']
-            tempdetector[i] = dataId['detector']
-        diaSources['visit'] = tempvisit
-        diaSources['detector'] = tempdetector
         diaSources['instrument'] = self._instrument
 
 
@@ -373,17 +354,13 @@ class ApdbSqliteQuery(DbQuery):
     ----------
     filename : `str`
         Path to the sqlite3 file containing the APDB to load.
-    butler : `lsst.daf.butler.Butler`
-        Butler to unpack detector/visit from ccdVisitId.
-        To be deprecated once this information is in the database.
     instrument : `str`
         Short name (e.g. "DECam") of instrument to make a dataId unpacker
         and to add to the table columns; supports any gen3 instrument.
         To be deprecated once this information is in the database.
     """
 
-    def __init__(self, filename, *, butler, instrument, **kwargs):
-        super().__init__(butler=butler, instrument=instrument, **kwargs)
+    def __init__(self, filename, instrument=None, **kwargs):
         # For sqlite, use a larger pool and a faster timeout, to allow many
         # repeat transactions with the same connection, as transactions on
         # our sqlite DBs should be small and fast.
@@ -414,9 +391,6 @@ class ApdbPostgresQuery(DbQuery):
     url : `str`
         Complete url to connect to postgres database, without prepended
         ``postgresql://``.
-    butler : `lsst.daf.butler.Butler`
-        Butler to unpack detector/visit from ccdVisitId.
-        To be deprecated once this information is in the database.
     instrument : `str`
         Short name (e.g. "DECam") of instrument to make a dataId unpacker
         and to add to the table columns; supports any gen3 instrument.
@@ -424,8 +398,7 @@ class ApdbPostgresQuery(DbQuery):
     """
 
     def __init__(self, namespace, url="rubin@usdf-prompt-processing-dev.slac.stanford.edu/lsst-devl",
-                 *, butler, instrument, **kwargs):
-        super().__init__(butler=butler, instrument=instrument, **kwargs)
+                 instrument=None, **kwargs):
         self._connection_string = f"postgresql://{url}"
         self._namespace = namespace
         self._engine = sqlalchemy.create_engine(self._connection_string, poolclass=sqlalchemy.pool.NullPool)

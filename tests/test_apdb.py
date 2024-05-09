@@ -21,32 +21,18 @@
 
 import os
 import unittest
-import tempfile
 
 import pandas as pd
 
 import lsst.utils.tests
 from lsst.analysis.ap.apdb import ApdbSqliteQuery
 
-from lsst.obs.lsst import LsstCamImSim
-import lsst.daf.butler
-
 
 class TestApdbSqlite(lsst.utils.tests.TestCase):
     def setUp(self):
         datadir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/")
         apdb_file = os.path.join(datadir, "apdb.sqlite3")
-
-        # TODO DM-39501: necessary until we can get detector/visit from APDB.
-        self.path = tempfile.TemporaryDirectory()
-        lsst.daf.butler.Butler.makeRepo(self.path.name)
-        butler = lsst.daf.butler.Butler(self.path.name, writeable=True)
-        LsstCamImSim().register(butler.registry, update=True)
-
-        self.apdb = ApdbSqliteQuery(apdb_file, butler=butler, instrument="LSSTCam-imSim")
-
-    def tearDown(self):
-        self.path.cleanup()
+        self.apdb = ApdbSqliteQuery(apdb_file, instrument="LSSTCam-imSim")
 
     def test_load_sources(self):
         result = self.apdb.load_sources(limit=None)
