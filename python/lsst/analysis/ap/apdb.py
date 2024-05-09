@@ -137,11 +137,13 @@ class DbQuery(abc.ABC):
         query = table.select().where(table.columns["diaObjectId"] == dia_object_id)
         if exclude_flagged:
             query = self._make_flag_exclusion_query(query, table, self.diaSource_flags_exclude)
-        query = query.order_by(table.columns["ccdVisitId"], table.columns["diaSourceId"])
+        query = query.order_by(table.columns["visit"],
+                               table.columns["detector"],
+                               table.columns["diaSourceId"])
         with self.connection as connection:
             result = pd.read_sql_query(query, connection)
 
-        self._fill_from_ccdVisitId(result)
+        self._fill_from_instrument(result)
         return result
 
     def load_forced_sources_for_object(self, dia_object_id, exclude_flagged=False, limit=100000):
@@ -167,11 +169,13 @@ class DbQuery(abc.ABC):
         query = table.select().where(table.columns["diaObjectId"] == dia_object_id)
         if exclude_flagged:
             query = self._make_flag_exclusion_query(query, table, self.diaSource_flags_exclude)
-        query = query.order_by(table.columns["ccdVisitId"], table.columns["diaForcedSourceId"])
+        query = query.order_by(table.columns["visit"],
+                               table.columns["detector"],
+                               table.columns["diaForcedSourceId"])
         with self.connection as connection:
             result = pd.read_sql_query(query, connection)
 
-        self._fill_from_ccdVisitId(result)
+        self._fill_from_instrument(result)
         return result
 
     def load_source(self, id):
@@ -194,7 +198,7 @@ class DbQuery(abc.ABC):
         if len(result) == 0:
             raise RuntimeError(f"diaSourceId={id} not found in DiaSource table")
 
-        self._fill_from_ccdVisitId(result)
+        self._fill_from_instrument(result)
         return result.iloc[0]
 
     def load_sources(self, exclude_flagged=False, limit=100000):
@@ -218,14 +222,16 @@ class DbQuery(abc.ABC):
         query = table.select()
         if exclude_flagged:
             query = self._make_flag_exclusion_query(query, table, self.diaSource_flags_exclude)
-        query = query.order_by(table.columns["ccdVisitId"], table.columns["diaSourceId"])
+        query = query.order_by(table.columns["visit"],
+                               table.columns["detector"],
+                               table.columns["diaSourceId"])
         if limit is not None:
             query = query.limit(limit)
 
         with self.connection as connection:
             result = pd.read_sql_query(query, connection)
 
-        self._fill_from_ccdVisitId(result)
+        self._fill_from_instrument(result)
         return result
 
     def load_object(self, id):
@@ -299,7 +305,7 @@ class DbQuery(abc.ABC):
         if len(result) == 0:
             raise RuntimeError(f"diaForcedSourceId={id} not found in DiaForcedSource table")
 
-        self._fill_from_ccdVisitId(result)
+        self._fill_from_instrument(result)
         return result.iloc[0]
 
     def load_forced_sources(self, limit=100000):
@@ -317,16 +323,18 @@ class DbQuery(abc.ABC):
         """
         table = self._tables["DiaForcedSource"]
         query = table.select()
-        query = query.order_by(table.columns["ccdVisitId"], table.columns["diaForcedSourceId"])
+        query = query.order_by(table.columns["visit"],
+                               table.columns["detector"],
+                               table.columns["diaForcedSourceId"])
         if limit is not None:
             query = query.limit(limit)
 
         with self.connection as connection:
             result = pd.read_sql_query(query, connection)
-        self._fill_from_ccdVisitId(result)
+        self._fill_from_instrument(result)
         return result
 
-    def _fill_from_ccdVisitId(self, diaSources):
+    def _fill_from_instrument(self, diaSources):
         """Add instrument to the database.
         This method is temporary, until APDB has instrument in its metadata.
 
@@ -371,6 +379,7 @@ class ApdbSqliteQuery(DbQuery):
             metadata = sqlalchemy.MetaData()
             metadata.reflect(bind=connection)
         self._tables = metadata.tables
+        super().__init__(instrument=instrument, **kwargs)
 
     @property
     @contextlib.contextmanager
@@ -410,6 +419,7 @@ class ApdbPostgresQuery(DbQuery):
         self._tables = {}
         for table in metadata.tables.values():
             self._tables[table.name] = table
+        super().__init__(instrument=instrument, **kwargs)
 
     @property
     @contextlib.contextmanager

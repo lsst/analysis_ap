@@ -157,10 +157,10 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         self.assertEqual(str(query.whereclause.compile(compile_kwargs={"literal_binds": True})),
                          queryString)
 
-    def test_fill_from_ccdVisitId(self):
+    def test_fill_from_instrument(self):
         # an empty series should be unchanged
         empty = pd.Series()
-        self.apdb._fill_from_ccdVisitId(empty)
+        self.apdb._fill_from_instrument(empty)
         self.assertTrue(empty.equals(pd.Series()))
 
 

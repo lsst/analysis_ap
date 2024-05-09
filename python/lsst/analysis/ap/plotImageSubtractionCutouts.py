@@ -815,12 +815,14 @@ def select_sources(apdb_query, limit, reliabilityMin=None, reliabilityMax=None):
                     query = query.where(table.columns['reliability'] >= reliabilityMin)
                 if reliabilityMax is not None:
                     query = query.where(table.columns['reliability'] <= reliabilityMax)
-                query = query.order_by(table.columns["ccdVisitId"], table.columns["diaSourceId"])
+                query = query.order_by(table.columns["visit"],
+                                       table.columns["detector"],
+                                       table.columns["diaSourceId"])
                 query = query.limit(limit).offset(offset)
                 sources = pd.read_sql_query(query, connection)
             if len(sources) == 0:
                 break
-            apdb_query._fill_from_ccdVisitId(sources)
+            apdb_query._fill_from_instrument(sources)
 
             yield sources
             offset += limit
