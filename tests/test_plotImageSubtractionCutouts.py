@@ -25,16 +25,14 @@ import sys
 import tempfile
 import unittest
 
-import pandas as pd
-import PIL
-
 import lsst.afw.table
 import lsst.geom
-from lsst.meas.algorithms import SourceDetectionTask
 import lsst.meas.base.tests
 import lsst.utils.tests
-
+import pandas as pd
+import PIL
 from lsst.analysis.ap import plotImageSubtractionCutouts
+from lsst.meas.algorithms import SourceDetectionTask
 
 # Sky center chosen to test metadata annotations (3-digit RA and negative Dec).
 skyCenter = lsst.geom.SpherePoint(245.0, -45.0, lsst.geom.degrees)

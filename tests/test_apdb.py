@@ -22,9 +22,8 @@
 import os
 import unittest
 
-import pandas as pd
-
 import lsst.utils.tests
+import pandas as pd
 from lsst.analysis.ap.apdb import ApdbSqliteQuery
 
 

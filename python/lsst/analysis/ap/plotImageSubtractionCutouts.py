@@ -29,21 +29,20 @@ import argparse
 import functools
 import io
 import logging
-from math import log10
 import multiprocessing
 import os
 import pathlib
+from math import log10
 
 import astropy.units as u
-import numpy as np
-import pandas as pd
-import sqlalchemy
-
 import lsst.dax.apdb
 import lsst.pex.config as pexConfig
 import lsst.pex.exceptions
 import lsst.pipe.base
 import lsst.utils
+import numpy as np
+import pandas as pd
+import sqlalchemy
 
 from . import apdb
 
