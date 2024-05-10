@@ -29,6 +29,7 @@ import lsst.afw.table
 import lsst.geom
 import lsst.meas.base.tests
 import lsst.utils.tests
+import numpy as np
 import pandas as pd
 import PIL
 from lsst.analysis.ap import plotImageSubtractionCutouts
@@ -240,6 +241,22 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
             # NOTE: the dimensions here are determined by the matplotlib figure
             # size (in inches) and the dpi (default=100), plus borders.
             self.assertEqual((im.height, im.width), (576, 645))
+
+    def test_generate_image_and_save_as_numpy(self):
+        """Test that we can save an image as a .npy file and then read it back.
+        """
+        config = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask.ConfigClass()
+        config.sizes = [100]
+        with tempfile.TemporaryDirectory() as path:
+            cutouts = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(config=config,
+                                                                                  output_path=path)
+            cutouts.generate_image(self.science, self.template, self.difference, skyCenter, self.scale,
+                                   dia_source_id=506428274000265570, save_as_numpy=True)
+            numpy_dir_path = os.path.join(path, "raw_npy")
+            for file in os.listdir(numpy_dir_path):
+                image_with_channel = np.load(numpy_dir_path + "/" + file)
+                image = np.squeeze(image_with_channel, axis=0)
+                self.assertEqual((image.shape[0], image.shape[1]), (100, 100))
 
     def test_write_images(self):
         """Test that images get written to a temporary directory."""
