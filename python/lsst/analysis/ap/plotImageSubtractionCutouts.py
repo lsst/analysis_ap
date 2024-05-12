@@ -29,22 +29,20 @@ import argparse
 import functools
 import io
 import logging
-from math import log10
 import multiprocessing
 import os
 import pathlib
+from math import log10
 
 import astropy.units as u
-import numpy as np
-import pandas as pd
-import sqlalchemy
-
-from lsst.ap.association import UnpackApdbFlags
 import lsst.dax.apdb
 import lsst.pex.config as pexConfig
 import lsst.pex.exceptions
 import lsst.pipe.base
 import lsst.utils
+import numpy as np
+import pandas as pd
+import sqlalchemy
 
 from . import apdb
 
@@ -279,9 +277,6 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         """
         # Ignore divide-by-zero and log-of-negative-value messages.
         seterr_dict = np.seterr(divide="ignore", invalid="ignore")
-        flag_map = os.path.join(lsst.utils.getPackageDir("ap_association"), "data/association-flag-map.yaml")
-        unpacker = UnpackApdbFlags(flag_map, "DiaSource")
-        flags = unpacker.unpack(data["flags"], "flags")
 
         # Create a subdirectory for the images.
         pathlib.Path(os.path.join(self._output_path, "images")).mkdir(exist_ok=True)
@@ -290,10 +285,10 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         butler_cache.set(butler, self.config)
         if njobs > 0:
             with multiprocessing.Pool(njobs) as pool:
-                sources = pool.starmap(self._do_one_source, zip(data.to_records(), flags))
+                sources = pool.starmap(self._do_one_source, data.to_records())
         else:
             for i, source in enumerate(data.to_records()):
-                id = self._do_one_source(source, flags[i])
+                id = self._do_one_source(source)
                 sources.append(id)
 
         # restore numpy error message state
@@ -301,16 +296,13 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         # Only return successful ids, not failures.
         return [s for s in sources if s is not None]
 
-    def _do_one_source(self, source, flags):
+    def _do_one_source(self, source):
         """Make cutouts for one diaSource.
 
         Parameters
         ----------
         source : `numpy.record`, optional
             DiaSource record for this cutout, to add metadata to the image.
-        flags : `str`, optional
-            Unpacked bits from the ``flags`` field in ``source``.
-            Required if ``source`` is not None.
 
         Returns
         -------
@@ -339,7 +331,6 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
             scale = science.wcs.getPixelScale().asArcseconds()
             image = self.generate_image(science, template, difference, center, scale,
                                         source=source if self.config.add_metadata else None,
-                                        flags=flags if self.config.add_metadata else None,
                                         footprint=footprint if self.config.use_footprint else None)
             self.cutout_path.mkdir(source["diaSourceId"])
             with open(self.cutout_path(source["diaSourceId"]), "wb") as outfile:
@@ -357,7 +348,7 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
             raise
 
     def generate_image(self, science, template, difference, center, scale,
-                       source=None, flags=None, footprint=None):
+                       source=None, footprint=None):
         """Get a 3-part cutout image to save to disk, for a single source.
 
         Parameters
@@ -374,9 +365,6 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
             Pixel scale in arcseconds.
         source : `numpy.record`, optional
             DiaSource record for this cutout, to add metadata to the image.
-        flags : `str`, optional
-            Unpacked bits from the ``flags`` field in ``source``.
-            Required if ``source`` is not None.
         footprint : `lsst.afw.detection.Footprint`, optional
             Detected source footprint; if specified, extract a square
             surrounding the footprint bbox, otherwise use ``config.size``.
@@ -386,8 +374,6 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         image: `io.BytesIO`
             The generated image, to be output to a file or displayed on screen.
         """
-        if (source is None) ^ (flags is None):
-            raise RuntimeError("Must pass both `source` and `flags` together.")
         if not self.config.use_footprint:
             sizes = self.config.sizes
             cutout_science, cutout_template, cutout_difference = [], [], []
@@ -408,10 +394,9 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
                                  cutout_difference,
                                  scale,
                                  sizes,
-                                 source=source,
-                                 flags=flags)
+                                 source=source)
 
-    def _plot_cutout(self, science, template, difference, scale, sizes, source=None, flags=None):
+    def _plot_cutout(self, science, template, difference, scale, sizes, source=None):
         """Plot the cutouts for a source in one image.
 
         Parameters
@@ -430,8 +415,6 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         size : `list` [`int`]
             List of x/y dimensions of of the images passed in, to set imshow
             extent.
-        flags : `str`, optional
-            Unpacked bits from the ``flags`` field in ``source``.
 
         Returns
         -------
@@ -492,7 +475,7 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
                     plot_one_image(axs[i][2], difference[i].image.array, sizes[i], None)
             plt.tight_layout()
             if source is not None:
-                _annotate_image(fig, source, flags, len_sizes)
+                _annotate_image(fig, source, len_sizes)
 
             output = io.BytesIO()
             plt.savefig(output, bbox_inches="tight", format="png")
@@ -503,7 +486,7 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         return output
 
 
-def _annotate_image(fig, source, flags, len_sizes):
+def _annotate_image(fig, source, len_sizes):
     """Annotate the cutouts image with metadata and flags.
 
     Parameters
@@ -512,8 +495,6 @@ def _annotate_image(fig, source, flags, len_sizes):
         Figure to be annotated.
     source : `numpy.record`
         DiaSource record of the object being plotted.
-    flags : `str`, optional
-        Unpacked bits from the ``flags`` field in ``source``.
     len_sizes : `int`
         Length of the ``size`` array set in configuration.
     """
@@ -522,12 +503,12 @@ def _annotate_image(fig, source, flags, len_sizes):
     flags_aperture = ["slot_ApFlux_flag", "slot_ApFlux_flag_apertureTruncated"]
     flags_forced = ["ip_diffim_forced_PsfFlux_flag", "ip_diffim_forced_PsfFlux_flag_noGoodPixels",
                     "ip_diffim_forced_PsfFlux_flag_edge"]
-    flags_edge = ["base_PixelFlags_flag_edge"]
-    flags_interp = ["base_PixelFlags_flag_interpolated", "base_PixelFlags_flag_interpolatedCenter"]
-    flags_saturated = ["base_PixelFlags_flag_saturated", "base_PixelFlags_flag_saturatedCenter"]
-    flags_cr = ["base_PixelFlags_flag_cr", "base_PixelFlags_flag_crCenter"]
-    flags_bad = ["base_PixelFlags_flag_bad"]
-    flags_suspect = ["base_PixelFlags_flag_suspect", "base_PixelFlags_flag_suspectCenter"]
+    flags_edge = ["pixelFlags_edge"]
+    flags_interp = ["pixelFlags_interpolated", "pixelFlags_interpolatedCenter"]
+    flags_saturated = ["pixelFlags_saturated", "pixelFlags_saturatedCenter"]
+    flags_cr = ["pixelFlags_cr", "pixelFlags_crCenter"]
+    flags_bad = ["pixelFlags_bad"]
+    flags_suspect = ["pixelFlags_suspect", "pixelFlags_suspectCenter"]
     flags_centroid = ["slot_Centroid_flag"]
     flags_shape = ["slot_Shape_flag", "slot_Shape_flag_no_pixels", "slot_Shape_flag_not_contained",
                    "slot_Shape_flag_parent_source"]
@@ -559,7 +540,7 @@ def _annotate_image(fig, source, flags, len_sizes):
     fig.text(0.75, heights[1], "PSF chi2:", color=text_color)
     fig.text(0.85, heights[1], f"{source['psfChi2']/source['psfNdata']:6.2f}")
 
-    fig.text(0.0, heights[2], "PSF (nJy):", color=flag_color if any(flags[flags_psf]) else text_color)
+    fig.text(0.0, heights[2], "PSF (nJy):", color=flag_color if any(source[flags_psf]) else text_color)
     fig.text(0.25, heights[2], f"{source['psfFlux']:8.1f}", horizontalalignment='right')
     fig.text(0.252, heights[2], "+/-", color=text_color)
     fig.text(0.29, heights[2], f"{source['psfFluxErr']:8.1f}")
@@ -567,31 +548,31 @@ def _annotate_image(fig, source, flags, len_sizes):
     fig.text(0.45, heights[2], f"{abs(source['psfFlux']/source['psfFluxErr']):6.2f}")
 
     # NOTE: yellow is hard to read on white; use goldenrod instead.
-    if any(flags[flags_edge]):
+    if any(source[flags_edge]):
         fig.text(0.55, heights[2], "EDGE", color="goldenrod", fontweight="bold")
-    if any(flags[flags_interp]):
+    if any(source[flags_interp]):
         fig.text(0.62, heights[2], "INTERP", color="green", fontweight="bold")
-    if any(flags[flags_saturated]):
+    if any(source[flags_saturated]):
         fig.text(0.72, heights[2], "SAT", color="green", fontweight="bold")
-    if any(flags[flags_cr]):
+    if any(source[flags_cr]):
         fig.text(0.77, heights[2], "CR", color="magenta", fontweight="bold")
-    if any(flags[flags_bad]):
+    if any(source[flags_bad]):
         fig.text(0.81, heights[2], "BAD", color="red", fontweight="bold")
     if source['isDipole']:
         fig.text(0.87, heights[2], "DIPOLE", color="indigo", fontweight="bold")
 
-    fig.text(0.0, heights[3], "ap (nJy):", color=flag_color if any(flags[flags_aperture]) else text_color)
+    fig.text(0.0, heights[3], "ap (nJy):", color=flag_color if any(source[flags_aperture]) else text_color)
     fig.text(0.25, heights[3], f"{source['apFlux']:8.1f}", horizontalalignment='right')
     fig.text(0.252, heights[3], "+/-", color=text_color)
     fig.text(0.29, heights[3], f"{source['apFluxErr']:8.1f}")
     fig.text(0.40, heights[3], "S/N:", color=text_color)
     fig.text(0.45, heights[3], f"{abs(source['apFlux']/source['apFluxErr']):#6.2f}")
 
-    if any(flags[flags_suspect]):
+    if any(source[flags_suspect]):
         fig.text(0.55, heights[3], "SUS", color="goldenrod", fontweight="bold")
-    if any(flags[flags_centroid]):
+    if any(source[flags_centroid]):
         fig.text(0.60, heights[3], "CENTROID", color="red", fontweight="bold")
-    if any(flags[flags_shape]):
+    if any(source[flags_shape]):
         fig.text(0.73, heights[3], "SHAPE", color="red", fontweight="bold")
     # Future option: to add two more flag flavors to the legend,
     # use locations 0.80 and 0.87
@@ -602,7 +583,7 @@ def _annotate_image(fig, source, flags, len_sizes):
                  color='#e41a1c' if source['reliability'] < 0.5 else '#4daf4a',
                  fontweight="bold")
 
-    fig.text(0.0, heights[4], "sci (nJy):", color=flag_color if any(flags[flags_forced]) else text_color)
+    fig.text(0.0, heights[4], "sci (nJy):", color=flag_color if any(source[flags_forced]) else text_color)
     fig.text(0.25, heights[4], f"{source['scienceFlux']:8.1f}", horizontalalignment='right')
     fig.text(0.252, heights[4], "+/-", color=text_color)
     fig.text(0.29, heights[4], f"{source['scienceFluxErr']:8.1f}")
@@ -770,13 +751,11 @@ def build_argparser():
     return parser
 
 
-def _make_apdbQuery(butler, instrument, sqlitefile=None, postgres_url=None, namespace=None):
+def _make_apdbQuery(instrument, sqlitefile=None, postgres_url=None, namespace=None):
     """Return a query connection to the specified APDB.
 
     Parameters
     ----------
-    butler : `lsst.daf.butler.Butler`
-        Butler to read detector/visit information from.
     instrument : `lsst.obs.base.Instrument`
         Instrument associated with this data, to get detector/visit data.
     sqlitefile : `str`, optional
@@ -797,9 +776,9 @@ def _make_apdbQuery(butler, instrument, sqlitefile=None, postgres_url=None, name
         Raised if the APDB connection kwargs are invalid in some way.
     """
     if sqlitefile is not None:
-        apdb_query = apdb.ApdbSqliteQuery(sqlitefile, butler=butler, instrument=instrument)
+        apdb_query = apdb.ApdbSqliteQuery(sqlitefile, instrument=instrument)
     elif postgres_url is not None and namespace is not None:
-        apdb_query = apdb.ApdbPostgresQuery(namespace, postgres_url, butler=butler, instrument=instrument)
+        apdb_query = apdb.ApdbPostgresQuery(namespace, postgres_url, instrument=instrument)
     else:
         raise RuntimeError("Cannot handle database connection args: "
                            f"sqlitefile={sqlitefile}, postgres_url={postgres_url}, namespace={namespace}")
@@ -835,12 +814,14 @@ def select_sources(apdb_query, limit, reliabilityMin=None, reliabilityMax=None):
                     query = query.where(table.columns['reliability'] >= reliabilityMin)
                 if reliabilityMax is not None:
                     query = query.where(table.columns['reliability'] <= reliabilityMax)
-                query = query.order_by(table.columns["ccdVisitId"], table.columns["diaSourceId"])
+                query = query.order_by(table.columns["visit"],
+                                       table.columns["detector"],
+                                       table.columns["diaSourceId"])
                 query = query.limit(limit).offset(offset)
                 sources = pd.read_sql_query(query, connection)
             if len(sources) == 0:
                 break
-            apdb_query._fill_from_ccdVisitId(sources)
+            apdb_query._fill_from_instrument(sources)
 
             yield sources
             offset += limit
@@ -880,8 +861,7 @@ def run_cutouts(args):
     )
 
     butler = lsst.daf.butler.Butler(args.repo, collections=args.collections)
-    apdb_query = _make_apdbQuery(butler,
-                                 args.instrument,
+    apdb_query = _make_apdbQuery(args.instrument,
                                  sqlitefile=args.sqlitefile,
                                  postgres_url=args.postgres_url,
                                  namespace=args.namespace)

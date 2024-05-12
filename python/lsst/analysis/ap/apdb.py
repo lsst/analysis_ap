@@ -24,18 +24,11 @@
 
 __all__ = ["DbQuery", "ApdbSqliteQuery", "ApdbPostgresQuery"]
 
-import os
 import abc
 import contextlib
-import warnings
 
 import pandas as pd
 import sqlalchemy
-import numpy as np
-
-import lsst.utils
-from lsst.ap.association import UnpackApdbFlags
-from lsst.pipe.base import Instrument
 
 
 class DbQuery(abc.ABC):
@@ -46,29 +39,23 @@ class DbQuery(abc.ABC):
 
     Parameters
     ----------
-    butler : `lsst.daf.butler.Butler`
-        Butler to unpack detector/visit from ccdVisitId.
-        To be deprecated once this information is in the database.
     instrument : `str`
         Short name (e.g. "DECam") of instrument to make a dataId unpacker
         and to add to the table columns; supports any gen3 instrument.
         To be deprecated once this information is in the database.
     """
 
-    def __init__(self, *, butler, instrument):
-        self._butler = butler
+    def __init__(self, instrument=None):
+        if not instrument:
+            raise RuntimeError("Instrument is required until DM-39502, "
+                               "when it will be part of the APDB metadata.")
         self._instrument = instrument
-
-        flag_map = os.path.join(lsst.utils.getPackageDir("ap_association"),
-                                "data/association-flag-map.yaml")
-        self._unpacker = UnpackApdbFlags(flag_map, "DiaSource")
-
-        self.set_excluded_diaSource_flags(['base_PixelFlags_flag_bad',
-                                           'base_PixelFlags_flag_suspect',
-                                           'base_PixelFlags_flag_saturatedCenter',
-                                           'base_PixelFlags_flag_interpolated',
-                                           'base_PixelFlags_flag_interpolatedCenter',
-                                           'base_PixelFlags_flag_edge',
+        self.set_excluded_diaSource_flags(['pixelFlags_bad',
+                                           'pixelFlags_suspect',
+                                           'pixelFlags_saturatedCenter',
+                                           'pixelFlags_interpolated',
+                                           'pixelFlags_interpolatedCenter',
+                                           'pixelFlags_edge',
                                            ])
 
     @property
@@ -98,14 +85,13 @@ class DbQuery(abc.ABC):
         flag_list : `list` [`str`]
             Flag names to exclude.
         """
-
         for flag in flag_list:
-            if not self._unpacker.flagExists(flag, columnName='flags'):
+            if flag not in self._tables["DiaSource"].columns:
                 raise ValueError(f"flag {flag} not included in DiaSource flags")
 
         self.diaSource_flags_exclude = flag_list
 
-    def _make_flag_exclusion_query(self, query, table, flag_list, column_name='flags'):
+    def _make_flag_exclusion_query(self, query, table, flag_list):
         """Return an SQL where query that excludes sources with chosen flags.
 
         Parameters
@@ -116,21 +102,17 @@ class DbQuery(abc.ABC):
             Query to include the where statement in.
         table : `sqlalchemy.schema.Table`
             Table containing the column to be queried.
-        column_name : `str`, optional
-            Name of flag column to query.
 
         Returns
         -------
-        clause : `str`
-            Clause to include in the SQL where statement.
+        query : `sqlalchemy.sql.Query`
+            Query that selects rows to exclude based on flags.
         """
-
-        bitmask = int(self._unpacker.makeFlagBitMask(flag_list, columnName=column_name))
-
-        if bitmask == 0:
-            warnings.warn(f"Flag bitmask is zero. Supplied flags: {flag_list}", RuntimeWarning)
-
-        return query.where(table.columns[column_name].op("&")(bitmask) == 0)
+        # Build a query that selects any source with one or more chosen flags,
+        # and return the opposite (`not_`) of that query.
+        query = query.where(sqlalchemy.not_(sqlalchemy.or_(table.columns[flag_col] == 1
+                                            for flag_col in flag_list)))
+        return query
 
     def load_sources_for_object(self, dia_object_id, exclude_flagged=False, limit=100000):
         """Load diaSources for a single diaObject.
@@ -155,11 +137,13 @@ class DbQuery(abc.ABC):
         query = table.select().where(table.columns["diaObjectId"] == dia_object_id)
         if exclude_flagged:
             query = self._make_flag_exclusion_query(query, table, self.diaSource_flags_exclude)
-        query = query.order_by(table.columns["ccdVisitId"], table.columns["diaSourceId"])
+        query = query.order_by(table.columns["visit"],
+                               table.columns["detector"],
+                               table.columns["diaSourceId"])
         with self.connection as connection:
             result = pd.read_sql_query(query, connection)
 
-        self._fill_from_ccdVisitId(result)
+        self._fill_from_instrument(result)
         return result
 
     def load_forced_sources_for_object(self, dia_object_id, exclude_flagged=False, limit=100000):
@@ -185,11 +169,13 @@ class DbQuery(abc.ABC):
         query = table.select().where(table.columns["diaObjectId"] == dia_object_id)
         if exclude_flagged:
             query = self._make_flag_exclusion_query(query, table, self.diaSource_flags_exclude)
-        query = query.order_by(table.columns["ccdVisitId"], table.columns["diaForcedSourceId"])
+        query = query.order_by(table.columns["visit"],
+                               table.columns["detector"],
+                               table.columns["diaForcedSourceId"])
         with self.connection as connection:
             result = pd.read_sql_query(query, connection)
 
-        self._fill_from_ccdVisitId(result)
+        self._fill_from_instrument(result)
         return result
 
     def load_source(self, id):
@@ -212,7 +198,7 @@ class DbQuery(abc.ABC):
         if len(result) == 0:
             raise RuntimeError(f"diaSourceId={id} not found in DiaSource table")
 
-        self._fill_from_ccdVisitId(result)
+        self._fill_from_instrument(result)
         return result.iloc[0]
 
     def load_sources(self, exclude_flagged=False, limit=100000):
@@ -236,14 +222,16 @@ class DbQuery(abc.ABC):
         query = table.select()
         if exclude_flagged:
             query = self._make_flag_exclusion_query(query, table, self.diaSource_flags_exclude)
-        query = query.order_by(table.columns["ccdVisitId"], table.columns["diaSourceId"])
+        query = query.order_by(table.columns["visit"],
+                               table.columns["detector"],
+                               table.columns["diaSourceId"])
         if limit is not None:
             query = query.limit(limit)
 
         with self.connection as connection:
             result = pd.read_sql_query(query, connection)
 
-        self._fill_from_ccdVisitId(result)
+        self._fill_from_instrument(result)
         return result
 
     def load_object(self, id):
@@ -317,7 +305,7 @@ class DbQuery(abc.ABC):
         if len(result) == 0:
             raise RuntimeError(f"diaForcedSourceId={id} not found in DiaForcedSource table")
 
-        self._fill_from_ccdVisitId(result)
+        self._fill_from_instrument(result)
         return result.iloc[0]
 
     def load_forced_sources(self, limit=100000):
@@ -335,18 +323,20 @@ class DbQuery(abc.ABC):
         """
         table = self._tables["DiaForcedSource"]
         query = table.select()
-        query = query.order_by(table.columns["ccdVisitId"], table.columns["diaForcedSourceId"])
+        query = query.order_by(table.columns["visit"],
+                               table.columns["detector"],
+                               table.columns["diaForcedSourceId"])
         if limit is not None:
             query = query.limit(limit)
 
         with self.connection as connection:
             result = pd.read_sql_query(query, connection)
-        self._fill_from_ccdVisitId(result)
+        self._fill_from_instrument(result)
         return result
 
-    def _fill_from_ccdVisitId(self, diaSources):
-        """Expand the ccdVisitId value in the database.
-        This method is temporary, until the CcdVisit table is filled out.
+    def _fill_from_instrument(self, diaSources):
+        """Add instrument to the database.
+        This method is temporary, until APDB has instrument in its metadata.
 
         Parameters
         ----------
@@ -356,18 +346,7 @@ class DbQuery(abc.ABC):
         # do nothing for an empty series
         if len(diaSources) == 0:
             return
-        instrumentDataId = self._butler.registry.expandDataId(instrument=self._instrument)
-        packer = Instrument.make_default_dimension_packer(data_id=instrumentDataId,
-                                                          is_exposure=False)
 
-        tempvisit = np.zeros(len(diaSources), dtype=np.int64)
-        tempdetector = np.zeros(len(diaSources), dtype=np.int64)
-        for i, ccdVisitId in enumerate(diaSources.ccdVisitId):
-            dataId = packer.unpack(ccdVisitId)
-            tempvisit[i] = dataId['visit']
-            tempdetector[i] = dataId['detector']
-        diaSources['visit'] = tempvisit
-        diaSources['detector'] = tempdetector
         diaSources['instrument'] = self._instrument
 
 
@@ -383,17 +362,13 @@ class ApdbSqliteQuery(DbQuery):
     ----------
     filename : `str`
         Path to the sqlite3 file containing the APDB to load.
-    butler : `lsst.daf.butler.Butler`
-        Butler to unpack detector/visit from ccdVisitId.
-        To be deprecated once this information is in the database.
     instrument : `str`
         Short name (e.g. "DECam") of instrument to make a dataId unpacker
         and to add to the table columns; supports any gen3 instrument.
         To be deprecated once this information is in the database.
     """
 
-    def __init__(self, filename, *, butler, instrument, **kwargs):
-        super().__init__(butler=butler, instrument=instrument, **kwargs)
+    def __init__(self, filename, instrument=None, **kwargs):
         # For sqlite, use a larger pool and a faster timeout, to allow many
         # repeat transactions with the same connection, as transactions on
         # our sqlite DBs should be small and fast.
@@ -404,6 +379,7 @@ class ApdbSqliteQuery(DbQuery):
             metadata = sqlalchemy.MetaData()
             metadata.reflect(bind=connection)
         self._tables = metadata.tables
+        super().__init__(instrument=instrument, **kwargs)
 
     @property
     @contextlib.contextmanager
@@ -424,9 +400,6 @@ class ApdbPostgresQuery(DbQuery):
     url : `str`
         Complete url to connect to postgres database, without prepended
         ``postgresql://``.
-    butler : `lsst.daf.butler.Butler`
-        Butler to unpack detector/visit from ccdVisitId.
-        To be deprecated once this information is in the database.
     instrument : `str`
         Short name (e.g. "DECam") of instrument to make a dataId unpacker
         and to add to the table columns; supports any gen3 instrument.
@@ -434,8 +407,7 @@ class ApdbPostgresQuery(DbQuery):
     """
 
     def __init__(self, namespace, url="rubin@usdf-prompt-processing-dev.slac.stanford.edu/lsst-devl",
-                 *, butler, instrument, **kwargs):
-        super().__init__(butler=butler, instrument=instrument, **kwargs)
+                 instrument=None, **kwargs):
         self._connection_string = f"postgresql://{url}"
         self._namespace = namespace
         self._engine = sqlalchemy.create_engine(self._connection_string, poolclass=sqlalchemy.pool.NullPool)
@@ -447,6 +419,7 @@ class ApdbPostgresQuery(DbQuery):
         self._tables = {}
         for table in metadata.tables.values():
             self._tables[table.name] = table
+        super().__init__(instrument=instrument, **kwargs)
 
     @property
     @contextlib.contextmanager
