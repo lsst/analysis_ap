@@ -165,6 +165,11 @@ class PlotImageSubtractionCutoutsConfig(pexConfig.Config):
         default=10000,
         optional=True
     )
+    save_as_numpy = pexConfig.Field(
+        doc="Save the raw cutout images in numpy format.",
+        dtype=bool,
+        default=False
+    )
 
 
 class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
@@ -330,6 +335,8 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
 
             scale = science.wcs.getPixelScale().asArcseconds()
             image = self.generate_image(science, template, difference, center, scale,
+                                        dia_source_id=source['diaSourceId'],
+                                        save_as_numpy=self.config.save_as_numpy,
                                         source=source if self.config.add_metadata else None,
                                         footprint=footprint if self.config.use_footprint else None)
             self.cutout_path.mkdir(source["diaSourceId"])
@@ -347,8 +354,8 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
             traceback.print_exc()
             raise
 
-    def generate_image(self, science, template, difference, center, scale,
-                       source=None, footprint=None):
+    def generate_image(self, science, template, difference, center, scale, dia_source_id=None,
+                       save_as_numpy=False, source=None, footprint=None):
         """Get a 3-part cutout image to save to disk, for a single source.
 
         Parameters
@@ -363,6 +370,10 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
             Center of the source to be cut out of each image.
         scale : `float`
             Pixel scale in arcseconds.
+        dia_source_id : `int`, optional
+            DiaSourceId to use in the filename, if saving to disk.
+        save_as_numpy : `bool`, optional
+            Save the raw cutout images in numpy format.
         source : `numpy.record`, optional
             DiaSource record for this cutout, to add metadata to the image.
         footprint : `lsst.afw.detection.Footprint`, optional
@@ -374,21 +385,37 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         image: `io.BytesIO`
             The generated image, to be output to a file or displayed on screen.
         """
+        numpy_cutouts = {}
         if not self.config.use_footprint:
             sizes = self.config.sizes
             cutout_science, cutout_template, cutout_difference = [], [], []
             for i, s in enumerate(sizes):
                 extent = lsst.geom.Extent2I(s, s)
-                cutout_science.append(science.getCutout(center, extent))
-                cutout_template.append(template.getCutout(center, extent))
-                cutout_difference.append(difference.getCutout(center, extent))
+                science_cutout = science.getCutout(center, extent)
+                template_cutout = template.getCutout(center, extent)
+                difference_cutout = difference.getCutout(center, extent)
+                if save_as_numpy:
+                    numpy_cutouts[f"sci_{s}"] = science_cutout.image.array
+                    numpy_cutouts[f"temp_{s}"] = template_cutout.image.array
+                    numpy_cutouts[f"diff_{s}"] = difference_cutout.image.array
+                    pathlib.Path(os.path.join(self._output_path, "raw_npy")).mkdir(exist_ok=True)
+                    path = os.path.join(self._output_path, "raw_npy")
+                    for cutout_type, cutout in numpy_cutouts.items():
+                        np.save(f"{path}/{dia_source_id}_{cutout_type}.npy",
+                                np.expand_dims(cutout, axis=0))
+                cutout_science.append(science_cutout)
+                cutout_template.append(template_cutout)
+                cutout_difference.append(difference_cutout)
         else:
+            if self.config.save_as_numpy:
+                raise RuntimeError("Cannot save as numpy when using footprints.")
             cutout_science = [science.getCutout(footprint.getBBox())]
             cutout_template = [template.getCutout(footprint.getBBox())]
             cutout_difference = [difference.getCutout(footprint.getBBox())]
             extent = footprint.getBBox().getDimensions()
             # Plot a square equal to the largest dimension.
             sizes = [extent.x if extent.x > extent.y else extent.y]
+
         return self._plot_cutout(cutout_science,
                                  cutout_template,
                                  cutout_difference,
