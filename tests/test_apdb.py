@@ -134,12 +134,12 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         query = table.select()
         query = self.apdb._make_flag_exclusion_query(query, table, self.apdb.diaSource_flags_exclude)
         # Check that the SQL query literal string does the flag exclusion.
-        queryString = ('NOT ("DiaSource"."pixelFlags_bad" = true '
-                       'OR "DiaSource"."pixelFlags_suspect" = true '
-                       'OR "DiaSource"."pixelFlags_saturatedCenter" = true '
-                       'OR "DiaSource"."pixelFlags_interpolated" = true '
-                       'OR "DiaSource"."pixelFlags_interpolatedCenter" = true '
-                       'OR "DiaSource"."pixelFlags_edge" = true)')
+        queryString = ('"DiaSource"."pixelFlags_bad" = false '
+                       'AND "DiaSource"."pixelFlags_suspect" = false '
+                       'AND "DiaSource"."pixelFlags_saturatedCenter" = false '
+                       'AND "DiaSource"."pixelFlags_interpolated" = false '
+                       'AND "DiaSource"."pixelFlags_interpolatedCenter" = false '
+                       'AND "DiaSource"."pixelFlags_edge" = false')
         self.assertEqual(str(query.whereclause.compile(compile_kwargs={"literal_binds": True})),
                          queryString)
 
@@ -152,7 +152,7 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         query = table.select()
         query = self.apdb._make_flag_exclusion_query(query, table, self.apdb.diaSource_flags_exclude)
         # Check that the SQL query does a non-default flag exclusion.
-        queryString = '"DiaSource"."pixelFlags_streak" != true'
+        queryString = '"DiaSource"."pixelFlags_streak" = false'
         self.assertEqual(str(query.whereclause.compile(compile_kwargs={"literal_binds": True})),
                          queryString)
 
