@@ -110,7 +110,7 @@ class DbQuery(abc.ABC):
         """
         # Build a query that selects any source with one or more chosen flags,
         # and return the opposite (`not_`) of that query.
-        query = query.where(sqlalchemy.not_(sqlalchemy.or_(table.columns[flag_col] == 1
+        query = query.where(sqlalchemy.not_(sqlalchemy.or_(table.columns[flag_col] == True  # noqa: E712
                                             for flag_col in flag_list)))
         return query
 
