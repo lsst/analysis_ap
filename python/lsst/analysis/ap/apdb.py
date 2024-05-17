@@ -110,8 +110,8 @@ class DbQuery(abc.ABC):
         """
         # Build a query that selects any source with one or more chosen flags,
         # and return the opposite (`not_`) of that query.
-        query = query.where(sqlalchemy.not_(sqlalchemy.or_(table.columns[flag_col] == 1
-                                            for flag_col in flag_list)))
+        query = query.where(sqlalchemy.and_(table.columns[flag_col] == False  # noqa: E712
+                                            for flag_col in flag_list))
         return query
 
     def load_sources_for_object(self, dia_object_id, exclude_flagged=False, limit=100000):
