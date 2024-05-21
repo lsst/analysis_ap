@@ -36,6 +36,7 @@ from math import log10
 
 import astropy.units as u
 import lsst.dax.apdb
+import lsst.geom
 import lsst.pex.config as pexConfig
 import lsst.pex.exceptions
 import lsst.pipe.base
@@ -290,7 +291,7 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         butler_cache.set(butler, self.config)
         if njobs > 0:
             with multiprocessing.Pool(njobs) as pool:
-                sources = pool.starmap(self._do_one_source, data.to_records())
+                sources = pool.map(self._do_one_source, data.to_records())
         else:
             for i, source in enumerate(data.to_records()):
                 id = self._do_one_source(source)
