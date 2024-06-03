@@ -172,12 +172,10 @@ class DbCassandraQuery(DbQuery):
             execution_profile="read_pandas",
         )
         catalog = cast(pd.DataFrame, result._current_rows)
-        catalog.sort_values(by=["ccdVisitId", "diaSourceId"], inplace=True)
+        catalog.sort_values(by=["visit", "detector", "diaSourceId"], inplace=True)
 
         if exclude_flagged:
             self._filter_flags(catalog)
-
-        self._fill_from_ccdVisitId(catalog)
 
         return catalog
 
@@ -200,12 +198,10 @@ class DbCassandraQuery(DbQuery):
             execution_profile="read_pandas",
         )
         catalog = cast(pd.DataFrame, result._current_rows)
-        catalog.sort_values(by=["ccdVisitId", "diaForcedSourceId"], inplace=True)
+        catalog.sort_values(by=["visit", "detector", "diaForcedSourceId"], inplace=True)
 
         if exclude_flagged:
             self._filter_flags(catalog)
-
-        self._fill_from_ccdVisitId(catalog)
 
         return catalog
 
@@ -220,7 +216,6 @@ class DbCassandraQuery(DbQuery):
             statement, (id,), timeout=self.timeout, execution_profile="read_pandas"
         )
         catalog = cast(pd.DataFrame, result._current_rows)
-        self._fill_from_ccdVisitId(catalog)
         return catalog.iloc[0]
 
     def load_sources(
@@ -238,12 +233,10 @@ class DbCassandraQuery(DbQuery):
             statement, timeout=self.timeout, execution_profile="read_pandas"
         )
         catalog = cast(pd.DataFrame, result._current_rows)
-        catalog.sort_values(by=["ccdVisitId", "diaSourceId"], inplace=True)
+        catalog.sort_values(by=["visit", "detector", "diaSourceId"], inplace=True)
 
         if exclude_flagged:
             self._filter_flags(catalog)
-
-        self._fill_from_ccdVisitId(catalog)
 
         return catalog
 
@@ -299,7 +292,6 @@ class DbCassandraQuery(DbQuery):
             statement, (id,), timeout=self.timeout, execution_profile="read_pandas"
         )
         catalog = cast(pd.DataFrame, result._current_rows)
-        self._fill_from_ccdVisitId(catalog)
         return catalog.iloc[0]
 
     def load_forced_sources(self, limit: int = 100000) -> pd.DataFrame:
@@ -315,39 +307,6 @@ class DbCassandraQuery(DbQuery):
             statement, timeout=self.timeout, execution_profile="read_pandas"
         )
         catalog = cast(pd.DataFrame, result._current_rows)
-        catalog.sort_values(by=["ccdVisitId", "diaForcedSourceId"], inplace=True)
-
-        self._fill_from_ccdVisitId(catalog)
+        catalog.sort_values(by=["visit", "detector", "diaForcedSourceId"], inplace=True)
 
         return catalog
-
-    def _fill_from_ccdVisitId(self, diaSources):
-        """Expand the ccdVisitId value in the database.
-        This method is temporary, until the CcdVisit table is filled out.
-
-        Parameters
-        ----------
-        diaSources : `pandas.core.frame.DataFrame`
-            Pandas dataframe with diaSources from an APDB; modified in-place.
-        """
-        if self._butler is None or self._instrument is None:
-            return
-        # do nothing for an empty series
-        if len(diaSources) == 0:
-            return
-        instrumentDataId = self._butler.registry.expandDataId(
-            instrument=self._instrument
-        )
-        packer = Instrument.make_default_dimension_packer(
-            data_id=instrumentDataId, is_exposure=False
-        )
-
-        tempvisit = np.zeros(len(diaSources), dtype=np.int64)
-        tempdetector = np.zeros(len(diaSources), dtype=np.int64)
-        for i, ccdVisitId in enumerate(diaSources.ccdVisitId):
-            dataId = packer.unpack(ccdVisitId)
-            tempvisit[i] = dataId["visit"]
-            tempdetector[i] = dataId["detector"]
-        diaSources["visit"] = tempvisit
-        diaSources["detector"] = tempdetector
-        diaSources["instrument"] = self._instrument
