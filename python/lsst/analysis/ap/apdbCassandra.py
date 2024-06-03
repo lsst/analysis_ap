@@ -50,9 +50,6 @@ class DbCassandraQuery(DbQuery):
         URI or local file path pointing to a file with serialized
         configuration, or a string with a "label:" prefix to locate
         configuration in APDB index.
-    butler : `lsst.daf.butler.Butler`
-        Butler to unpack detector/visit from ccdVisitId.
-        To be deprecated once this information is in the database.
     instrument : `str`
         Short name (e.g. "DECam") of instrument to make a dataId unpacker
         and to add to the table columns; supports any gen3 instrument.
@@ -69,10 +66,8 @@ class DbCassandraQuery(DbQuery):
         self,
         config_uri: ResourcePathExpression,
         *,
-        butler: lsst.daf.butler.Butler | None = None,
         instrument: Instrument | None = None,
     ):
-        self._butler = butler
         self._instrument = instrument
 
         flag_map = os.path.join(
