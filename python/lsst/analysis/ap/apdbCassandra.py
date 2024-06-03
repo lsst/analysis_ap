@@ -157,7 +157,7 @@ class DbCassandraQuery(DbQuery):
             ApdbTables.DiaSource,
             columns=column_names,
             where='"diaObjectId" = ?',
-            limit=limit,
+            limit=int(limit),
         )
         statement = self._apdb._preparer.prepare(query)
         result = self._apdb._session.execute(
@@ -183,7 +183,7 @@ class DbCassandraQuery(DbQuery):
             ApdbTables.DiaForcedSource,
             columns=column_names,
             where='"diaObjectId" = ?',
-            limit=limit,
+            limit=int(limit),
         )
         statement = self._apdb._preparer.prepare(query)
         result = self._apdb._session.execute(
@@ -221,7 +221,7 @@ class DbCassandraQuery(DbQuery):
         query = self._build_query(
             ApdbTables.DiaSource,
             columns=column_names,
-            limit=limit,
+            limit=int(limit),
         )
         statement = self._apdb._preparer.prepare(query)
         result = self._apdb._session.execute(
@@ -264,7 +264,7 @@ class DbCassandraQuery(DbQuery):
         query = self._build_query(
             table,
             columns=column_names,
-            limit=limit,
+            limit=int(limit),
         )
         statement = self._apdb._preparer.prepare(query)
         result = self._apdb._session.execute(
@@ -295,7 +295,7 @@ class DbCassandraQuery(DbQuery):
         query = self._build_query(
             ApdbTables.DiaForcedSource,
             columns=column_names,
-            limit=limit,
+            limit=int(limit),
         )
         statement = self._apdb._preparer.prepare(query)
         result = self._apdb._session.execute(
