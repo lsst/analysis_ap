@@ -857,13 +857,15 @@ def select_sources(apdb_query, limit, reliabilityMin=None, reliabilityMax=None):
         connection.close()
 
 
-def len_sources(apdb_query):
+def len_sources(apdb_query, namespace=None):
     """Return the number of DiaSources in the supplied APDB.
 
     Parameters
     ----------
     apdb_query : `lsst.analysis.ap.ApdbQuery`
         APDB query interface to load from.
+    namespace : `str`, optional
+        Postgres schema to load data from.
 
     Returns
     -------
@@ -871,6 +873,8 @@ def len_sources(apdb_query):
         Number of diaSources in this APDB.
     """
     with apdb_query.connection as connection:
+        if namespace:
+            connection.execute(sqlalchemy.text(f"SET search_path TO {namespace}"))
         count = connection.execute(sqlalchemy.text('select count(*) FROM "DiaSource";')).scalar()
     return count
 
@@ -908,11 +912,21 @@ def run_cutouts(args):
         sources = cutouts.run(data, butler, njobs=args.jobs)
     else:
         sources = []
-        count = len_sources(apdb_query)
+        all_data = []
+        cols_to_export = ["diaSourceId", "ra", "dec", "midpointMjdTai"]
+        count = len_sources(apdb_query, args.namespace)
         for i, data in enumerate(getter):
+            all_data.append(data[cols_to_export])
             sources.extend(cutouts.write_images(data, butler, njobs=args.jobs))
             print(f"Completed {i+1} batches of {args.limit} size, out of {count} diaSources.")
         cutouts.write_manifest(sources)
+        # Export diaSource dataframe to a CSV if `save_as_numpy` is enabled.
+        if config.save_as_numpy:
+            dia_sources_df = pd.concat(all_data)
+            # Filter out any errored diaSourceIds.
+            dia_sources_df = dia_sources_df[dia_sources_df['diaSourceId'].isin(sources)]
+            dia_sources_df.to_csv(
+                os.path.join(args.outputPath, "exported_sources.csv"), index=False)
 
     print(f"Generated {len(sources)} diaSource cutouts to {args.outputPath}.")
 
