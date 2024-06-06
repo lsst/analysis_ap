@@ -32,7 +32,178 @@ import sqlalchemy
 
 
 class DbQuery(abc.ABC):
-    """Base class for APDB connection and query management.
+    """Abstract interface for APDB queries.
+
+    Notes
+    -----
+    APDB interface used by AP pipeline is defined by `lsst.dax.apdb.Apdb`
+    class. Methods in this class are for non-pipeline tools that can analyse
+    data produced by pipeline. APDB schema is not designed for analysis queries
+    and performance of these methods can be non-optimal, especially for
+    Cassandra backend. It is expected that these analysis queries should not be
+    executed on production Cassandra service.
+    """
+
+    def set_excluded_diaSource_flags(self, flag_list: list[str]) -> None:
+        """Set flags of diaSources to exclude when loading diaSources.
+
+        Any diaSources with configured flags are not returned
+        when calling `load_sources_for_object` or `load_sources`
+        with `exclude_flagged = True`.
+
+        Parameters
+        ----------
+        flag_list : `list` [`str`]
+            Flag names to exclude.
+        """
+        raise NotImplementedError()
+
+    def load_sources_for_object(
+        self, dia_object_id: int, exclude_flagged: bool = False, limit: int = 100000
+    ) -> pd.DataFrame:
+        """Load diaSources for a single diaObject.
+
+        Parameters
+        ----------
+        dia_object_id : `int`
+            Id of object to load sources for.
+        exclude_flagged : `bool`, optional
+            Exclude sources that have selected flags set.
+            Use `set_excluded_diaSource_flags` to configure which flags
+            are excluded.
+        limit : `int`
+            Maximum number of rows to return.
+
+        Returns
+        -------
+        data : `pandas.DataFrame`
+            A data frame of diaSources for the specified diaObject.
+        """
+        raise NotImplementedError()
+
+    def load_forced_sources_for_object(
+        self, dia_object_id: int, exclude_flagged: bool = False, limit: int = 100000
+    ) -> pd.DataFrame:
+        """Load diaForcedSources for a single diaObject.
+
+        Parameters
+        ----------
+        dia_object_id : `int`
+            Id of object to load sources for.
+        exclude_flagged : `bool`, optional
+            Exclude sources that have selected flags set.
+            Use `set_excluded_diaSource_flags` to configure which flags
+            are excluded.
+        limit : `int`
+            Maximum number of rows to return.
+
+        Returns
+        -------
+        data : `pandas.DataFrame`
+            A data frame of diaSources for the specified diaObject.
+        """
+        raise NotImplementedError()
+
+    def load_source(self, id: int) -> pd.Series:
+        """Load one diaSource.
+
+        Parameters
+        ----------
+        id : `int`
+            The diaSourceId to load data for.
+
+        Returns
+        -------
+        data : `pandas.Series`
+            The requested diaSource.
+        """
+        raise NotImplementedError()
+
+    def load_sources(self, exclude_flagged: bool = False, limit: int = 100000) -> pd.DataFrame:
+        """Load diaSources.
+
+        Parameters
+        ----------
+        exclude_flagged : `bool`, optional
+            Exclude sources that have selected flags set.
+            Use `set_excluded_diaSource_flags` to configure which flags
+            are excluded.
+        limit : `int`
+            Maximum number of rows to return.
+
+        Returns
+        -------
+        data : `pandas.DataFrame`
+            All available diaSources.
+        """
+        raise NotImplementedError()
+
+    def load_object(self, id: int) -> pd.Series:
+        """Load the most-recently updated version of one diaObject.
+
+        Parameters
+        ----------
+        id : `int`
+            The diaObjectId to load data for.
+
+        Returns
+        -------
+        data : `pandas.Series`
+            The requested object.
+        """
+        raise NotImplementedError()
+
+    def load_objects(self, limit: int = 100000, latest: bool = True) -> pd.DataFrame:
+        """Load all diaObjects.
+
+        Parameters
+        ----------
+        limit : `int`
+            Maximum number of rows to return.
+        latest : `bool`
+            Only load diaObjects where validityEnd is None.
+            These are the most-recently updated diaObjects.
+
+        Returns
+        -------
+        data : `pandas.DataFrame`
+            All available diaObjects.
+        """
+        raise NotImplementedError()
+
+    def load_forced_source(self, id: int) -> pd.Series:
+        """Load one diaForcedSource.
+
+        Parameters
+        ----------
+        id : `int`
+            The diaForcedSourceId to load data for.
+
+        Returns
+        -------
+        data : `pandas.Series`
+            The requested forced source.
+        """
+        raise NotImplementedError()
+
+    def load_forced_sources(self, limit: int = 100000) -> pd.DataFrame:
+        """Load all diaForcedSources.
+
+        Parameters
+        ----------
+        limit : `int`
+            Maximum number of rows to return.
+
+        Returns
+        -------
+        data : `pandas.DataFrame`
+            All available diaForcedSources.
+        """
+        raise NotImplementedError()
+
+
+class DbSqlQuery(DbQuery):
+    """Base class for APDB connection and query management for SQL backends.
 
     Subclasses must specify a ``connection`` property to use as a context-
     manager for queries.
@@ -350,7 +521,7 @@ class DbQuery(abc.ABC):
         diaSources['instrument'] = self._instrument
 
 
-class ApdbSqliteQuery(DbQuery):
+class ApdbSqliteQuery(DbSqlQuery):
     """Open an sqlite3 APDB file to load data from it.
 
     This class keeps the sqlite connection open after initialization because
@@ -387,7 +558,7 @@ class ApdbSqliteQuery(DbQuery):
         yield self._engine.connect()
 
 
-class ApdbPostgresQuery(DbQuery):
+class ApdbPostgresQuery(DbSqlQuery):
     """Connect to a running postgres APDB instance and load data from it.
 
     This class connects to the database only when the ``connection`` context
