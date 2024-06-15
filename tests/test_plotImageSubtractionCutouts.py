@@ -60,14 +60,14 @@ DATA = pd.DataFrame(
         "isDipole": [True, False],
         "reliability": [0, 1.0],
         # First diaSource has all flags set, and second diaSource has none
-        "slot_PsfFlux_flag": [1, 0],
-        "slot_PsfFlux_flag_noGoodPixels": [1, 0],
-        "slot_PsfFlux_flag_edge": [1, 0],
-        "slot_ApFlux_flag": [1, 0],
-        "slot_ApFlux_flag_apertureTruncated": [1, 0],
-        "ip_diffim_forced_PsfFlux_flag": [1, 0],
-        "ip_diffim_forced_PsfFlux_flag_noGoodPixels": [1, 0],
-        "ip_diffim_forced_PsfFlux_flag_edge": [1, 0],
+        "psfFlux_flag": [1, 0],
+        "psfFlux_flag_noGoodPixels": [1, 0],
+        "psfFlux_flag_edge": [1, 0],
+        "apFlux_flag": [1, 0],
+        "apFlux_flag_apertureTruncated": [1, 0],
+        "forced_PsfFlux_flag": [1, 0],
+        "forced_PsfFlux_flag_noGoodPixels": [1, 0],
+        "forced_PsfFlux_flag_edge": [1, 0],
         "pixelFlags_edge": [1, 0],
         "pixelFlags_interpolated": [1, 0],
         "pixelFlags_interpolatedCenter": [1, 0],
@@ -78,11 +78,11 @@ DATA = pd.DataFrame(
         "pixelFlags_bad": [1, 0],
         "pixelFlags_suspect": [1, 0],
         "pixelFlags_suspectCenter": [1, 0],
-        "slot_Centroid_flag": [1, 0],
-        "slot_Shape_flag": [1, 0],
-        "slot_Shape_flag_no_pixels": [1, 0],
-        "slot_Shape_flag_not_contained": [1, 0],
-        "slot_Shape_flag_parent_source": [1, 0],
+        "centroid_flag": [1, 0],
+        "shape_flag": [1, 0],
+        "shape_flag_no_pixels": [1, 0],
+        "shape_flag_not_contained": [1, 0],
+        "shape_flag_parent_source": [1, 0],
     }
 )
 
@@ -131,7 +131,7 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
             # im.show()
             # NOTE: the dimensions here are determined by the matplotlib figure
             # size (in inches) and the dpi (default=100), plus borders.
-            self.assertEqual((im.height, im.width), (233, 630))
+            self.assertEqual((im.height, im.width), (245, 651))
 
     def test_generate_image_larger_cutout(self):
         """A different cutout size: the resulting cutout image is the same
@@ -147,7 +147,7 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
             # im.show()
             # NOTE: the dimensions here are determined by the matplotlib figure
             # size (in inches) and the dpi (default=100), plus borders.
-            self.assertEqual((im.height, im.width), (233, 630))
+            self.assertEqual((im.height, im.width), (245, 651))
 
     def test_generate_image_metadata(self):
         """Test that we can add metadata to the image; it changes the height
@@ -171,7 +171,7 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
             # im.show()
             # NOTE: the dimensions here are determined by the matplotlib figure
             # size (in inches) and the dpi (default=100), plus borders.
-            self.assertEqual((im.height, im.width), (343, 645))
+            self.assertEqual((im.height, im.width), (349, 655))
 
         # A cutout without any flags: the dimensions should be unchanged.
         cutout = cutouts.generate_image(self.science,
@@ -185,7 +185,7 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
             # im.show()
             # NOTE: the dimensions here are determined by the matplotlib figure
             # size (in inches) and the dpi (default=100), plus borders.
-            self.assertEqual((im.height, im.width), (343, 645))
+            self.assertEqual((im.height, im.width), (349, 655))
 
     def test_generate_image_multisize_cutouts_without_metadata(self):
         """Multiple cutout sizes: the resulting image is larger in size
@@ -201,7 +201,7 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
             # im.show()
             # NOTE: the dimensions here are determined by the matplotlib figure
             # size (in inches) and the dpi (default=100), plus borders.
-            self.assertEqual((im.height, im.width), (450, 630))
+            self.assertEqual((im.height, im.width), (480, 651))
 
     def test_generate_image_multisize_cutouts_with_metadata(self):
         """Test that we can add metadata to the image; it changes the height
@@ -226,7 +226,7 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
             # im.show()
             # NOTE: the dimensions here are determined by the matplotlib figure
             # size (in inches) and the dpi (default=100), plus borders.
-            self.assertEqual((im.height, im.width), (576, 645))
+            self.assertEqual((im.height, im.width), (591, 655))
 
         # A cutout without any flags: the dimensions should be unchanged.
         cutout = cutouts.generate_image(self.science,
@@ -240,7 +240,7 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
             # im.show()
             # NOTE: the dimensions here are determined by the matplotlib figure
             # size (in inches) and the dpi (default=100), plus borders.
-            self.assertEqual((im.height, im.width), (576, 645))
+            self.assertEqual((im.height, im.width), (591, 655))
 
     def test_generate_image_and_save_as_numpy(self):
         """Test that we can save an image as a .npy file and then read it back.

@@ -35,6 +35,7 @@ import pathlib
 from math import log10
 
 import astropy.units as u
+from lsst.daf.butler import DatasetNotFoundError
 import lsst.dax.apdb
 import lsst.geom
 import lsst.pex.config as pexConfig
@@ -93,9 +94,22 @@ class _ButlerCache:
             Science, template, and difference exposure for this data id.
         """
         data_id = {'instrument': instrument, 'detector': detector, 'visit': visit}
-        return (self._butler.get(self._config.science_image_type, data_id),
-                self._butler.get(f'{self._config.diff_image_type}_templateExp', data_id),
-                self._butler.get(f'{self._config.diff_image_type}_differenceExp', data_id))
+        try:
+            self._butler.get(self._config.science_image_type, data_id)
+        except DatasetNotFoundError as e:
+            self.log.error(f'Cannot load {self._config.science_image_type} with data_id {data_id}: {e}')
+            if self._config.science_image_type == 'calexp':
+                self.log.info(f'No {self._config.science_image_type} found, trying initial_pvi')
+                self._config.science_image_type = 'initial_pvi'
+            elif self._config.science_image_type == 'initial_pvi':
+                self.log.info(f'No {self._config.science_image_type} found, trying calexp')
+                self._config.science_image_type = 'calexp'
+            else:
+                self.log.info('Must provide a valid datasetType and dataId to retrieve science image.')
+        finally:
+            return (self._butler.get(self._config.science_image_type, data_id),
+                    self._butler.get(f'{self._config.diff_image_type}_templateExp', data_id),
+                    self._butler.get(f'{self._config.diff_image_type}_differenceExp', data_id))
 
     @functools.lru_cache(maxsize=4)
     def get_catalog(self, instrument, detector, visit):
@@ -501,7 +515,6 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
                     plot_one_image(axs[i][0], template[i].image.array, sizes[i], None)
                     plot_one_image(axs[i][1], science[i].image.array, sizes[i], None)
                     plot_one_image(axs[i][2], difference[i].image.array, sizes[i], None)
-            plt.tight_layout()
             if source is not None:
                 _annotate_image(fig, source, len_sizes)
 
@@ -527,19 +540,19 @@ def _annotate_image(fig, source, len_sizes):
         Length of the ``size`` array set in configuration.
     """
     # Names of flags fields to add a flag label to the image, using any().
-    flags_psf = ["slot_PsfFlux_flag", "slot_PsfFlux_flag_noGoodPixels", "slot_PsfFlux_flag_edge"]
-    flags_aperture = ["slot_ApFlux_flag", "slot_ApFlux_flag_apertureTruncated"]
-    flags_forced = ["ip_diffim_forced_PsfFlux_flag", "ip_diffim_forced_PsfFlux_flag_noGoodPixels",
-                    "ip_diffim_forced_PsfFlux_flag_edge"]
+    flags_psf = ["psfFlux_flag", "psfFlux_flag_noGoodPixels", "psfFlux_flag_edge"]
+    flags_aperture = ["apFlux_flag", "apFlux_flag_apertureTruncated"]
+    flags_forced = ["forced_PsfFlux_flag", "forced_PsfFlux_flag_noGoodPixels",
+                    "forced_PsfFlux_flag_edge"]
     flags_edge = ["pixelFlags_edge"]
     flags_interp = ["pixelFlags_interpolated", "pixelFlags_interpolatedCenter"]
     flags_saturated = ["pixelFlags_saturated", "pixelFlags_saturatedCenter"]
     flags_cr = ["pixelFlags_cr", "pixelFlags_crCenter"]
     flags_bad = ["pixelFlags_bad"]
     flags_suspect = ["pixelFlags_suspect", "pixelFlags_suspectCenter"]
-    flags_centroid = ["slot_Centroid_flag"]
-    flags_shape = ["slot_Shape_flag", "slot_Shape_flag_no_pixels", "slot_Shape_flag_not_contained",
-                   "slot_Shape_flag_parent_source"]
+    flags_centroid = ["centroid_flag"]
+    flags_shape = ["shape_flag", "shape_flag_no_pixels", "shape_flag_not_contained",
+                   "shape_flag_parent_source"]
 
     flag_color = "red"
     text_color = "grey"
