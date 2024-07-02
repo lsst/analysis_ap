@@ -301,13 +301,16 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         # Create a subdirectory for the images.
         pathlib.Path(os.path.join(self._output_path, "images")).mkdir(exist_ok=True)
 
+        # Exclude index if they are replicated in columns.
+        indexNotInColumns = not any(index in data.columns for index in data.index.names)
+
         sources = []
         butler_cache.set(butler, self.config)
         if njobs > 0:
             with multiprocessing.Pool(njobs) as pool:
-                sources = pool.map(self._do_one_source, data.to_records())
+                sources = pool.map(self._do_one_source, data.to_records(index=indexNotInColumns))
         else:
-            for i, source in enumerate(data.to_records()):
+            for i, source in enumerate(data.to_records(index=indexNotInColumns)):
                 id = self._do_one_source(source)
                 sources.append(id)
 
