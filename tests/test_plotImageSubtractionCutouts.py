@@ -250,9 +250,10 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
         with tempfile.TemporaryDirectory() as path:
             cutouts = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(config=config,
                                                                                   output_path=path)
+            dia_source_id = 506428274000265570
             cutouts.generate_image(self.science, self.template, self.difference, skyCenter, self.scale,
-                                   dia_source_id=506428274000265570, save_as_numpy=True)
-            numpy_dir_path = os.path.join(path, "raw_npy")
+                                   dia_source_id=dia_source_id, save_as_numpy=True)
+            numpy_dir_path = cutouts.numpy_path(dia_source_id, "")
             for file in os.listdir(numpy_dir_path):
                 image_with_channel = np.load(numpy_dir_path + "/" + file)
                 image = np.squeeze(image_with_channel, axis=0)
@@ -529,20 +530,29 @@ class TestPlotImageSubtractionCutoutsMain(lsst.utils.tests.TestCase):
 
 
 class TestCutoutPath(lsst.utils.tests.TestCase):
+
+    def setUp(self):
+        self.id = 12345678
+
     def test_normal_path(self):
         """Can the path manager handles non-chunked paths?
         """
         manager = plotImageSubtractionCutouts.CutoutPath("some/root/path")
-        path = manager(id=12345678)
-        self.assertEqual(path, "some/root/path/images/12345678.png")
+        path = manager(id=self.id, filename=f"{self.id}.png")
+        self.assertEqual(path, f"some/root/path/images/{self.id}.png")
 
     def test_chunking(self):
         """Can the path manager handle ids chunked into 10,000 file
         directories?
         """
         manager = plotImageSubtractionCutouts.CutoutPath("some/root/path", chunk_size=10000)
-        path = manager(id=12345678)
-        self.assertEqual(path, "some/root/path/images/12340000/12345678.png")
+        path = manager(id=self.id, filename=f"{self.id}.png")
+        self.assertEqual(path, f"some/root/path/images/12340000/{self.id}.png")
+
+    def test_subdir(self):
+        manager = plotImageSubtractionCutouts.CutoutPath("some/root/path", subdirectory="foo")
+        path = manager(id=self.id, filename=f"{self.id}.png")
+        self.assertEqual(path, f"some/root/path/foo/{self.id}.png")
 
     def test_chunk_sizes(self):
         """Test valid and invalid values for the chunk_size parameter.
