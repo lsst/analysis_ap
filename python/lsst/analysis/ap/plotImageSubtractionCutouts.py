@@ -31,7 +31,6 @@ import io
 import logging
 import multiprocessing
 import os
-import pathlib
 from math import log10
 
 import astropy.units as u
@@ -190,6 +189,8 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         super().__init__(**kwargs)
         self._output_path = output_path
         self.cutout_path = CutoutPath(output_path, chunk_size=self.config.chunk_size)
+        self.numpy_path = CutoutPath(output_path, chunk_size=self.config.chunk_size,
+                                     subdirectory='numpy')
 
     def _reduce_kwargs(self):
         # to allow pickling of this Task
@@ -253,7 +254,7 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         cutout_path = CutoutPath(self.config.url_root)
         manifest = pd.DataFrame()
         manifest["external_id"] = sources
-        manifest["location:1"] = [cutout_path(x) for x in sources]
+        manifest["location:1"] = [cutout_path(x, f'{x}.png') for x in sources]
         manifest["metadata:diaSourceId"] = sources
         return manifest
 
@@ -261,8 +262,8 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         """Make the 3-part cutout images for each requested source and write
         them to disk.
 
-        Creates a ``images/`` subdirectory via cutout_path if one
-        does not already exist; images are written there as PNG files.
+        Creates ``images/`` and ``numpy/`` subdirectories if they
+        do not already exist; images are written there as PNG and npy files.
 
         Parameters
         ----------
@@ -283,9 +284,6 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         """
         # Ignore divide-by-zero and log-of-negative-value messages.
         seterr_dict = np.seterr(divide="ignore", invalid="ignore")
-
-        # Create a subdirectory for the images.
-        pathlib.Path(os.path.join(self._output_path, "images")).mkdir(exist_ok=True)
 
         sources = []
         butler_cache.set(butler, self.config)
@@ -341,7 +339,8 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
                                         source=source if self.config.add_metadata else None,
                                         footprint=footprint if self.config.use_footprint else None)
             self.cutout_path.mkdir(source["diaSourceId"])
-            with open(self.cutout_path(source["diaSourceId"]), "wb") as outfile:
+            with open(self.cutout_path(source["diaSourceId"],
+                      f'{source["diaSourceId"]}.png'), "wb") as outfile:
                 outfile.write(image.getbuffer())
             return source["diaSourceId"]
         except (LookupError, lsst.pex.exceptions.Exception) as e:
@@ -396,14 +395,13 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
                 template_cutout = template.getCutout(center, extent)
                 difference_cutout = difference.getCutout(center, extent)
                 if save_as_numpy:
+                    self.numpy_path.mkdir(dia_source_id)
                     numpy_cutouts[f"sci_{s}"] = science_cutout.image.array
                     numpy_cutouts[f"temp_{s}"] = template_cutout.image.array
                     numpy_cutouts[f"diff_{s}"] = difference_cutout.image.array
-                    pathlib.Path(os.path.join(self._output_path, "raw_npy")).mkdir(exist_ok=True)
-                    path = os.path.join(self._output_path, "raw_npy")
                     for cutout_type, cutout in numpy_cutouts.items():
-                        np.save(f"{path}/{dia_source_id}_{cutout_type}.npy",
-                                np.expand_dims(cutout, axis=0))
+                        outfile = self.numpy_path(dia_source_id, f'{dia_source_id}_{cutout_type}.npy')
+                        np.save(outfile, np.expand_dims(cutout, axis=0))
                 cutout_science.append(science_cutout)
                 cutout_template.append(template_cutout)
                 cutout_difference.append(difference_cutout)
@@ -632,6 +630,8 @@ class CutoutPath:
         Root file path to manage.
     chunk_size : `int`, optional
         At most this many files per directory. Must be a power of 10.
+    subdirectory : `str`, optional
+        Name of the subdirectory
 
     Raises
     ------
@@ -639,19 +639,22 @@ class CutoutPath:
         Raised if chunk_size is not a power of 10.
     """
 
-    def __init__(self, root, chunk_size=None):
+    def __init__(self, root, chunk_size=None, subdirectory='images'):
         self._root = root
         if chunk_size is not None and (log10(chunk_size) != int(log10(chunk_size))):
             raise RuntimeError(f"CutoutPath file chunk_size must be a power of 10, got {chunk_size}.")
         self._chunk_size = chunk_size
+        self._subdirectory = subdirectory
 
-    def __call__(self, id):
+    def __call__(self, id, filename):
         """Return the full path to a diaSource cutout.
 
         Parameters
         ----------
         id : `int`
             Source id to create the path for.
+        filename: `str`
+            Filename to write.
 
         Returns
         -------
@@ -662,9 +665,10 @@ class CutoutPath:
             return (id // size)*size
 
         if self._chunk_size is not None:
-            return os.path.join(self._root, f"images/{chunker(id, self._chunk_size)}/{id}.png")
+            return os.path.join(self._root,
+                                f"{self._subdirectory}/{chunker(id, self._chunk_size)}/{filename}")
         else:
-            return os.path.join(self._root, f"images/{id}.png")
+            return os.path.join(self._root, f"{self._subdirectory}/{filename}")
 
     def mkdir(self, id):
         """Make the directory tree to write this cutout id to.
@@ -674,8 +678,7 @@ class CutoutPath:
         id : `int`
             Source id to create the path for.
         """
-        path = os.path.dirname(self(id))
-        os.makedirs(path, exist_ok=True)
+        os.makedirs(self(id, ""), exist_ok=True)
 
 
 def build_argparser():
