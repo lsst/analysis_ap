@@ -351,7 +351,7 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
                 record = catalog.find(source['diaSourceId'])
                 footprint = record.getFootprint()
 
-            scale = science.wcs.getPixelScale().asArcseconds()
+            scale = science.wcs.getPixelScale(science.getBBox().getCenter()).asArcseconds()
             image = self.generate_image(science, template, difference, center, scale,
                                         dia_source_id=source['diaSourceId'],
                                         save_as_numpy=self.config.save_as_numpy,
