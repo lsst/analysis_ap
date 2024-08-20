@@ -309,7 +309,9 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
                 sources = pool.map(self._do_one_source, data.to_records(index=indexNotInColumns))
         else:
             for i, source in enumerate(data.to_records(index=indexNotInColumns)):
-                id = self._do_one_source(source)
+                if not self.cutout_path.exists(source["diaSourceId"],
+                                               f'{source["diaSourceId"]}.png'):
+                    id = self._do_one_source(source)
                 sources.append(id)
 
         # restore numpy error message state
@@ -662,6 +664,29 @@ class CutoutPath:
         self._chunk_size = chunk_size
         self._subdirectory = subdirectory
 
+    def directory(self, id):
+        """Return the directory to store the output in.
+
+        Parameters
+        ----------
+        id : `int`
+            Source id to create the path for.
+
+        Returns
+        -------
+        directory: `str`
+            Directory for this file.
+        """
+
+        def chunker(id, size):
+            return (id // size)*size
+
+        if self._chunk_size is not None:
+            return os.path.join(self._root,
+                                f"{self._subdirectory}/{chunker(id, self._chunk_size)}")
+        else:
+            return os.path.join(self._root, f"{self._subdirectory}")
+
     def __call__(self, id, filename):
         """Return the full path to a diaSource cutout.
 
@@ -677,14 +702,26 @@ class CutoutPath:
         path : `str`
             Full path to the requested file.
         """
-        def chunker(id, size):
-            return (id // size)*size
 
-        if self._chunk_size is not None:
-            return os.path.join(self._root,
-                                f"{self._subdirectory}/{chunker(id, self._chunk_size)}/{filename}")
-        else:
-            return os.path.join(self._root, f"{self._subdirectory}/{filename}")
+        return os.path.join(self.directory(id), filename)
+
+    def exists(self, id, filename):
+        """Return True if the file already exists.
+
+        Parameters
+        ----------
+        id : `int`
+            Source id to create the path for.
+        filename: `str`
+            Filename to write.
+
+        Returns
+        -------
+        exists : `bool`
+            Does the supplied filename exist?
+        """
+
+        return os.path.exists(os.path.join(self.directory(id), filename))
 
     def mkdir(self, id):
         """Make the directory tree to write this cutout id to.
@@ -694,7 +731,7 @@ class CutoutPath:
         id : `int`
             Source id to create the path for.
         """
-        os.makedirs(self(id, ""), exist_ok=True)
+        os.makedirs(self.directory(id), exist_ok=True)
 
 
 def build_argparser():
@@ -916,13 +953,20 @@ def run_cutouts(args):
                                  sqlitefile=args.sqlitefile,
                                  postgres_url=args.postgres_url,
                                  namespace=args.namespace)
-    data = select_sources(apdb_query, args.limit, args.reliabilityMin, args.reliabilityMax)
 
     config = PlotImageSubtractionCutoutsConfig()
     if args.configFile is not None:
         config.load(os.path.expanduser(args.configFile))
     config.freeze()
     cutouts = PlotImageSubtractionCutoutsTask(config=config, output_path=args.outputPath)
+
+    if config.save_as_numpy:
+        # save the RB output up front so we can use partial runs
+        data = select_sources(apdb_query, args.limit, args.reliabilityMin, args.reliabilityMax)
+        cols_to_export = ["diaSourceId", "ra", "dec", "midpointMjdTai"]
+        # this is inefficient but otherwise we don't use the same query
+        all_data = pd.concat([d[cols_to_export] for d in data])
+        all_data.to_csv(os.path.join(args.outputPath, "all_diasources.csv"), index=False)
 
     getter = select_sources(apdb_query, args.limit, args.reliabilityMin, args.reliabilityMax)
     # Process just one block of length "limit", or all sources in the database?
@@ -931,21 +975,16 @@ def run_cutouts(args):
         sources = cutouts.run(data, butler, njobs=args.jobs)
     else:
         sources = []
-        all_data = []
-        cols_to_export = ["diaSourceId", "ra", "dec", "midpointMjdTai"]
         count = len_sources(apdb_query, args.namespace)
         for i, data in enumerate(getter):
-            all_data.append(data[cols_to_export])
             sources.extend(cutouts.write_images(data, butler, njobs=args.jobs))
             print(f"Completed {i+1} batches of {args.limit} size, out of {count} diaSources.")
         cutouts.write_manifest(sources)
-        # Export diaSource dataframe to a CSV if `save_as_numpy` is enabled.
-        if config.save_as_numpy:
-            dia_sources_df = pd.concat(all_data)
-            # Filter out any errored diaSourceIds.
-            dia_sources_df = dia_sources_df[dia_sources_df['diaSourceId'].isin(sources)]
-            dia_sources_df.to_csv(
-                os.path.join(args.outputPath, "exported_sources.csv"), index=False)
+
+    if config.save_as_numpy:
+        # Write a dataframe with only diasources successfully written.
+        data.loc[data['diaSourceId'].isin(sources), cols_to_export].to_csv(
+            os.path.join(args.outputPath, "exported_diasources.csv"), index=False)
 
     print(f"Generated {len(sources)} diaSource cutouts to {args.outputPath}.")
 

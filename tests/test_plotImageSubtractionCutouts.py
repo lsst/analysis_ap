@@ -253,7 +253,7 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
             dia_source_id = 506428274000265570
             cutouts.generate_image(self.science, self.template, self.difference, skyCenter, self.scale,
                                    dia_source_id=dia_source_id, save_as_numpy=True)
-            numpy_dir_path = cutouts.numpy_path(dia_source_id, "")
+            numpy_dir_path = cutouts.numpy_path.directory(dia_source_id)
             for file in os.listdir(numpy_dir_path):
                 image_with_channel = np.load(numpy_dir_path + "/" + file)
                 image = np.squeeze(image_with_channel, axis=0)
