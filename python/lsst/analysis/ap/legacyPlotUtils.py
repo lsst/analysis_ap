@@ -526,7 +526,7 @@ def getCcdAndVisitSizeOnSky(repo, sourceTable, instrument='DECam',
                         instrument=instrument, visit=visit, detector=detector)
     bbox = butler.get('calexp.bbox', collections=collections,
                       instrument=instrument, visit=visit, detector=detector)
-    pixelScale = calexp.getWcs().getPixelScale().asArcseconds()
+    pixelScale = calexp.getWcs().getPixelScale(bbox.getCenter()).asArcseconds()
     ccdArea = (pixelScale*pixelScale*bbox.getArea()*u.arcsec**2).to(u.deg**2).value
     visitArea = ccdArea * nGoodCcds
     return ccdArea, visitArea
@@ -736,7 +736,8 @@ def plotSeeingHistogram(repo, sourceTable, ccd=35, instrument='DECam', collectio
                         visit=int(visit), detector=ccd)
     fwhm['visit'] = pd.Series(visits)
     fwhm['radius'] = pd.Series(radii, index=fwhm.index)
-    pixelScale = calexp.getWcs().getPixelScale().asArcseconds()  # same for all visits
+    bbox = calexp.getBBox()
+    pixelScale = calexp.getWcs().getPixelScale(bbox.getCenter()).asArcseconds()  # same for all visits
     fig, ax = plt.subplots(figsize=(6, 4))
     plt.hist(fwhm['radius'].values, alpha=0.5)
     plt.xlabel('Seeing FWHM (pixels)')
