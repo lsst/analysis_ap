@@ -242,14 +242,14 @@ def compare_sources(butler1, butler2, query1, query2,
         for i in range(len(unique1)):
             dId = unique1.iloc[i]['diaSourceId']
             idx = unique1.index[i]
-            unique1.at[idx, 'pathexists'] = os.path.exists(cpath1(dId))
+            unique1.at[idx, 'pathexists'] = os.path.exists(cpath1(dId, f"{dId}.png"))
         pathchk1 = unique1.loc[~unique1['pathexists']]
 
         unique2['pathexists'] = False
         for i in range(len(unique2)):
             dId = unique2.iloc[i]['diaSourceId']
             idx = unique2.index[i]
-            unique2.at[idx, 'pathexists'] = os.path.exists(cpath2(dId))
+            unique2.at[idx, 'pathexists'] = os.path.exists(cpath2(dId, f"{dId}.png"))
         pathchk2 = unique2.loc[~unique2['pathexists']]
 
         # Only write those that don't exist yet
@@ -258,12 +258,13 @@ def compare_sources(butler1, butler2, query1, query2,
 
         if display_cutouts:
             for isrc in unique1.itertuples():
-                fpath = cpath1(int(isrc.diaSourceId))
+                fpath = cpath1(int(isrc.diaSourceId), f"{int(isrc.diaSourceId)}.png")
                 print('Unique to dataset 1: {}'.format(int(isrc.diaSourceId)))
                 display(Image(filename=fpath))
 
             for isrc in unique2.itertuples():
-                fpath = cpath2(int(isrc.diaSourceId))
+                fpath = cpath2(int(isrc.diaSourceId), f"{int(isrc.diaSourceId)}.png")
+
                 print('Unique to dataset 2: {}'.format(int(isrc.diaSourceId)))
                 display(Image(filename=fpath))
 
