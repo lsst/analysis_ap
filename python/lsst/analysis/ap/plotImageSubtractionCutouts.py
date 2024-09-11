@@ -963,7 +963,16 @@ def run_cutouts(args):
     if config.save_as_numpy:
         # save the RB output up front so we can use partial runs
         data = select_sources(apdb_query, args.limit, args.reliabilityMin, args.reliabilityMax)
-        cols_to_export = ["diaSourceId", "ra", "dec", "midpointMjdTai"]
+        cols_to_export = ["diaSourceId", "visit", "detector", "diaObjectId",
+                          "ssObjectId", "midpointMjdTai", "ra", "dec", "x", "y",
+                          "apFlux", "apFluxErr", "snr", "psfFlux", "psfFluxErr",
+                          "isDipole", "trailLength", "band", "extendedness",
+                          "pixelFlags_bad", "pixelFlags_cr", "pixelFlags_crCenter",
+                          "pixelFlags_edge", "pixelFlags_interpolated", "pixelFlags_interpolatedCenter",
+                          "pixelFlags_offimage", "pixelFlags_saturated", "pixelFlags_saturatedCenter",
+                          "pixelFlags_suspect", "pixelFlags_suspectCenter", "pixelFlags_streak",
+                          "pixelFlags_streakCenter", "pixelFlags_injected", "pixelFlags_injectedCenter",
+                          "pixelFlags_injected_template", "pixelFlags_injected_templateCenter"]
         # this is inefficient but otherwise we don't use the same query
         all_data = pd.concat([d[cols_to_export] for d in data])
         all_data.to_csv(os.path.join(args.outputPath, "all_diasources.csv"), index=False)
