@@ -975,7 +975,7 @@ def run_cutouts(args):
                           "pixelFlags_injected_template", "pixelFlags_injected_templateCenter"]
         # this is inefficient but otherwise we don't use the same query
         all_data = pd.concat([d[cols_to_export] for d in data])
-        all_data.to_csv(os.path.join(args.outputPath, "all_diasources.csv"), index=False)
+        all_data.to_csv(os.path.join(args.outputPath, "all_diasources.csv.gz"), index=False)
 
     getter = select_sources(apdb_query, args.limit, args.reliabilityMin, args.reliabilityMax)
     # Process just one block of length "limit", or all sources in the database?
@@ -993,7 +993,7 @@ def run_cutouts(args):
     if config.save_as_numpy:
         # Write a dataframe with only diasources successfully written.
         data.loc[data['diaSourceId'].isin(sources), cols_to_export].to_csv(
-            os.path.join(args.outputPath, "exported_diasources.csv"), index=False)
+            os.path.join(args.outputPath, "exported_diasources.csv.gz"), index=False)
 
     print(f"Generated {len(sources)} diaSource cutouts to {args.outputPath}.")
 
