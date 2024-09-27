@@ -88,6 +88,11 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         result = self.apdb.load_objects(limit=2)
         self.assertEqual(len(result), 2)
 
+        # TODO DM-39503: No objects here have more than 1 source: once we have
+        # a larger test APDB, implement this check.
+        # result = self.apdb.load_objects(min_sources=2)
+        # self.assertEqual(len(result), SOMETHING)
+
     def test_load_forced_sources(self):
         result = self.apdb.load_forced_sources(limit=None)
         self.assertEqual(len(result), 376)
