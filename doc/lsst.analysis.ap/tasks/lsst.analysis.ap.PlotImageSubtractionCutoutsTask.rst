@@ -114,7 +114,7 @@ The example image shown below contains cutouts of sizes 32x32 and 64x64 pixels.
     :alt: Multi-size cutouts, with no metadata.
 
     Multi-size image cutout, with no additional metadata.
-    
+
 Similarly, the image below shows an example of multi-size cutouts along with all catalog flags set.
 This can be achieved by setting the ``config.add_metadata`` key to ``True``.
 
@@ -131,3 +131,38 @@ Configuration fields
 ====================
 
 .. lsst-task-config-fields:: lsst.analysis.ap.PlotImageSubtractionCutoutsTask
+
+.. py:currentmodule:: lsst.analysis.ap
+
+Generating Image Cutouts
+========================
+
+Image cutouts can be generated using the ``plotImageSubtractionCutouts`` task from ``analysis_ap``. Note: To
+have the required dataframe format, ``diaSources`` from the ``goodSeeingDiff_diaSrcTable`` must be used.
+
+.. code-block:: python
+
+    import lsst.daf.butler as dafButler
+    from lsst.analysis.ap import plotImageSubtractionCutouts
+
+    repo = '/repo/main'
+    collections = '/path/to/your/collection'
+    butler = dafButler.Butler(repo, collections=collections)
+
+    # Note that the outer double quotes and inner single quotes are required for the query to succeed.
+    where = "instrument='LSSTComCam' and skymap='lsst_cells_v1' and visit=2024120600049"
+    limit = 10
+
+    cutoutConfig = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsConfig(science_image_type='initial_pvi')
+    cutoutTask = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(
+        config=cutoutConfig, output_path='/your/output/path'
+    )
+
+    data_refs = butler.query_datasets(
+        "goodSeeingDiff_diaSrcTable", where=where, limit=limit
+    )
+
+    for ref in data_refs:
+        diaSourceTable = butler.get(ref)
+        dv_diaSourceTable["instrument"] = "LSSTComCam"
+        cutoutTask.run(diaSourceTable, butler)
