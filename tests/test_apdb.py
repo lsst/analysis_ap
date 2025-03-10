@@ -31,7 +31,7 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
     def setUp(self):
         datadir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/")
         apdb_file = os.path.join(datadir, "apdb.sqlite3")
-        self.apdb = ApdbSqliteQuery(apdb_file, instrument="LSSTCam-imSim")
+        self.apdb = ApdbSqliteQuery(apdb_file)
 
     def test_load_sources(self):
         result = self.apdb.load_sources(limit=None)
