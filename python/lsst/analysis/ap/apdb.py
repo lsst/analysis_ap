@@ -26,6 +26,7 @@ __all__ = ["DbQuery", "ApdbSqliteQuery", "ApdbPostgresQuery"]
 
 import abc
 import contextlib
+import warnings
 
 import pandas as pd
 import sqlalchemy
@@ -217,10 +218,12 @@ class DbSqlQuery(DbQuery):
     """
 
     def __init__(self, instrument=None):
-        if not instrument:
-            raise RuntimeError("Instrument is required until DM-39502, "
-                               "when it will be part of the APDB metadata.")
-        self._instrument = instrument
+        if instrument is not None:
+            warnings.warn("The instrument name is now pulled from the APDB; "
+                          "this kwarg is ignored and will be removed after v29",
+                          FutureWarning,
+                          stacklevel=2)
+
         self.set_excluded_diaSource_flags(['pixelFlags_bad',
                                            'pixelFlags_suspect',
                                            'pixelFlags_saturatedCenter',
@@ -228,6 +231,13 @@ class DbSqlQuery(DbQuery):
                                            'pixelFlags_interpolatedCenter',
                                            'pixelFlags_edge',
                                            ])
+
+        key = "instrument"
+        table = self._tables["metadata"]
+        sql = sqlalchemy.sql.select(table.columns.value).where(table.columns.name == key)
+        with self.connection as conn:
+            result = conn.execute(sql)
+            self._instrument = result.scalar()
 
     @property
     @contextlib.contextmanager
@@ -506,7 +516,7 @@ class DbSqlQuery(DbQuery):
         return result
 
     def _fill_from_instrument(self, diaSources):
-        """Add instrument to the database.
+        """Add an instrument column to a list of sources.
         This method is temporary, until APDB has instrument in its metadata.
 
         Parameters
@@ -550,7 +560,7 @@ class ApdbSqliteQuery(DbSqlQuery):
             metadata = sqlalchemy.MetaData()
             metadata.reflect(bind=connection)
         self._tables = metadata.tables
-        super().__init__(instrument=instrument, **kwargs)
+        super().__init__(**kwargs)
 
     @property
     @contextlib.contextmanager
