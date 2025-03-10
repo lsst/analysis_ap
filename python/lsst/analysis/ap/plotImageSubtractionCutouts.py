@@ -94,21 +94,21 @@ class _ButlerCache:
         """
         data_id = {'instrument': instrument, 'detector': detector, 'visit': visit}
         try:
-            self._butler.get(self._config.science_image_type, data_id)
+            science = self._butler.get(self._config.science_image_type, data_id)
         except DatasetNotFoundError as e:
-            self.log.error(f'Cannot load {self._config.science_image_type} with data_id {data_id}: {e}')
-            if self._config.science_image_type == 'calexp':
-                self.log.info(f'No {self._config.science_image_type} found, trying initial_pvi')
-                self._config.science_image_type = 'initial_pvi'
-            elif self._config.science_image_type == 'initial_pvi':
-                self.log.info(f'No {self._config.science_image_type} found, trying calexp')
-                self._config.science_image_type = 'calexp'
-            else:
-                self.log.info('Must provide a valid datasetType and dataId to retrieve science image.')
-        finally:
-            return (self._butler.get(self._config.science_image_type, data_id),
-                    self._butler.get(f'{self._config.diff_image_type}_templateExp', data_id),
-                    self._butler.get(f'{self._config.diff_image_type}_differenceExp', data_id))
+            self.log.error(f"Cannot load {self._config.science_image_type} with data_id {data_id}: {e}")
+            self.log.error("If you are working with data processed earlier than May 2025, try setting "
+                           "config.science_image_type = 'initial_pvi' or 'calexp'.")
+            raise
+
+        if self._config.diff_image_type is not None:
+            template = self._butler.get(f"{self._config.diff_image_type}_templateExp", data_id)
+            difference = self._butler.get(f"{self._config.diff_image_type}_differenceExp", data_id)
+        else:
+            template = self._butler.get("template_detector", data_id)
+            difference = self._butler.get("difference_image", data_id)
+
+        return science, template, difference
 
     @functools.lru_cache(maxsize=4)
     def get_catalog(self, instrument, detector, visit):
@@ -157,15 +157,18 @@ class PlotImageSubtractionCutoutsConfig(pexConfig.Config):
         optional=True,
     )
     diff_image_type = pexConfig.Field(
-        doc="Dataset type of template and difference image to use for cutouts; "
-            "Will have '_templateExp' and '_differenceExp' appended for butler.get(), respectively.",
+        doc="Optional partial dataset name of template and difference image to use for cutouts; "
+            "will have '_templateExp' and '_differenceExp' appended for butler.get(), respectively."
+            " If not specified, use `template_detector` and `difference_image`, respectively.",
         dtype=str,
-        default="goodSeeingDiff",
+        default=None,
+        optional=True
     )
     science_image_type = pexConfig.Field(
-        doc="Dataset type of science image to use for cutouts.",
+        doc="Dataset type of science image to use for cutouts; "
+            "older processings could be `calexp` or `initial_pvi`.",
         dtype=str,
-        default="calexp",
+        default="preliminary_visit_image",
     )
     add_metadata = pexConfig.Field(
         doc="Annotate the cutouts with catalog metadata, including coordinates, fluxes, flags, etc.",
