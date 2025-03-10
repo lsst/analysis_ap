@@ -796,11 +796,6 @@ def build_argparser():
     )
 
     parser.add_argument(
-        "--instrument",
-        required=True,
-        help="Instrument short-name (e.g. 'DECam') of the data being loaded.",
-    )
-    parser.add_argument(
         "-C",
         "--configFile",
         help="File containing the PlotImageSubtractionCutoutsConfig to load.",
@@ -835,13 +830,11 @@ def build_argparser():
     return parser
 
 
-def _make_apdbQuery(instrument, sqlitefile=None, postgres_url=None, namespace=None):
+def _make_apdbQuery(sqlitefile=None, postgres_url=None, namespace=None):
     """Return a query connection to the specified APDB.
 
     Parameters
     ----------
-    instrument : `lsst.obs.base.Instrument`
-        Instrument associated with this data, to get detector/visit data.
     sqlitefile : `str`, optional
         SQLite file to load APDB from; if set, postgres kwargs are ignored.
     postgres_url : `str`, optional
@@ -860,9 +853,9 @@ def _make_apdbQuery(instrument, sqlitefile=None, postgres_url=None, namespace=No
         Raised if the APDB connection kwargs are invalid in some way.
     """
     if sqlitefile is not None:
-        apdb_query = apdb.ApdbSqliteQuery(sqlitefile, instrument=instrument)
+        apdb_query = apdb.ApdbSqliteQuery(sqlitefile)
     elif postgres_url is not None and namespace is not None:
-        apdb_query = apdb.ApdbPostgresQuery(namespace, postgres_url, instrument=instrument)
+        apdb_query = apdb.ApdbPostgresQuery(namespace, postgres_url)
     else:
         raise RuntimeError("Cannot handle database connection args: "
                            f"sqlitefile={sqlitefile}, postgres_url={postgres_url}, namespace={namespace}")
@@ -949,8 +942,7 @@ def run_cutouts(args):
     )
 
     butler = lsst.daf.butler.Butler(args.repo, collections=args.collections)
-    apdb_query = _make_apdbQuery(args.instrument,
-                                 sqlitefile=args.sqlitefile,
+    apdb_query = _make_apdbQuery(sqlitefile=args.sqlitefile,
                                  postgres_url=args.postgres_url,
                                  namespace=args.namespace)
 
