@@ -45,7 +45,7 @@ import numpy as np
 import pandas as pd
 import sqlalchemy
 
-from . import apdb
+from lsst.analysis.ap import apdb
 
 
 class _ButlerCache:
