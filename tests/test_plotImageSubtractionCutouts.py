@@ -411,7 +411,6 @@ class TestPlotImageSubtractionCutoutsMain(lsst.utils.tests.TestCase):
             f"--sqlitefile={self.sqlitefile}",
             f"--collections={self.collection}",
             f"-C={self.configFile}",
-            f"--instrument={self.instrument}",
             self.repo,
             self.outputPath,
         ]
@@ -433,7 +432,6 @@ class TestPlotImageSubtractionCutoutsMain(lsst.utils.tests.TestCase):
             "plotImageSubtractionCutouts",
             f"--sqlitefile={self.sqlitefile}",
             f"-C={self.configFile}",
-            f"--instrument={self.instrument}",
             self.repo,
             self.outputPath,
         ]
@@ -452,7 +450,6 @@ class TestPlotImageSubtractionCutoutsMain(lsst.utils.tests.TestCase):
         args = [
             "plotImageSubtractionCutouts",
             f"--sqlitefile={self.sqlitefile}",
-            f"--instrument={self.instrument}",
             self.repo,
             self.outputPath,
             f"-C={self.configFile}",
@@ -477,7 +474,6 @@ class TestPlotImageSubtractionCutoutsMain(lsst.utils.tests.TestCase):
             f"--sqlitefile={self.sqlitefile}",
             f"--collections={self.collection}",
             f"-C={self.configFile}",
-            f"--instrument={self.instrument}",
             "--all",
             "--limit=5",
             self.repo,
@@ -514,7 +510,6 @@ class TestPlotImageSubtractionCutoutsMain(lsst.utils.tests.TestCase):
             f"--collections={self.collection}",
             "-j2",
             f"-C={self.configFile}",
-            f"--instrument={self.instrument}",
             self.repo,
             self.outputPath,
         ]

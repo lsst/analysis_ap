@@ -94,21 +94,21 @@ class _ButlerCache:
         """
         data_id = {'instrument': instrument, 'detector': detector, 'visit': visit}
         try:
-            self._butler.get(self._config.science_image_type, data_id)
+            science = self._butler.get(self._config.science_image_type, data_id)
         except DatasetNotFoundError as e:
-            self.log.error(f'Cannot load {self._config.science_image_type} with data_id {data_id}: {e}')
-            if self._config.science_image_type == 'calexp':
-                self.log.info(f'No {self._config.science_image_type} found, trying initial_pvi')
-                self._config.science_image_type = 'initial_pvi'
-            elif self._config.science_image_type == 'initial_pvi':
-                self.log.info(f'No {self._config.science_image_type} found, trying calexp')
-                self._config.science_image_type = 'calexp'
-            else:
-                self.log.info('Must provide a valid datasetType and dataId to retrieve science image.')
-        finally:
-            return (self._butler.get(self._config.science_image_type, data_id),
-                    self._butler.get(f'{self._config.diff_image_type}_templateExp', data_id),
-                    self._butler.get(f'{self._config.diff_image_type}_differenceExp', data_id))
+            self.log.error(f"Cannot load {self._config.science_image_type} with data_id {data_id}: {e}")
+            self.log.error("If you are working with data processed earlier than May 2025, try setting "
+                           "config.science_image_type = 'initial_pvi' or 'calexp'.")
+            raise
+
+        if self._config.diff_image_type is not None:
+            template = self._butler.get(f"{self._config.diff_image_type}_templateExp", data_id)
+            difference = self._butler.get(f"{self._config.diff_image_type}_differenceExp", data_id)
+        else:
+            template = self._butler.get("template_detector", data_id)
+            difference = self._butler.get("difference_image", data_id)
+
+        return science, template, difference
 
     @functools.lru_cache(maxsize=4)
     def get_catalog(self, instrument, detector, visit):
@@ -157,15 +157,18 @@ class PlotImageSubtractionCutoutsConfig(pexConfig.Config):
         optional=True,
     )
     diff_image_type = pexConfig.Field(
-        doc="Dataset type of template and difference image to use for cutouts; "
-            "Will have '_templateExp' and '_differenceExp' appended for butler.get(), respectively.",
+        doc="Optional partial dataset name of template and difference image to use for cutouts; "
+            "will have '_templateExp' and '_differenceExp' appended for butler.get(), respectively."
+            " If not specified, use `template_detector` and `difference_image`, respectively.",
         dtype=str,
-        default="goodSeeingDiff",
+        default=None,
+        optional=True
     )
     science_image_type = pexConfig.Field(
-        doc="Dataset type of science image to use for cutouts.",
+        doc="Dataset type of science image to use for cutouts; "
+            "older processings could be `calexp` or `initial_pvi`.",
         dtype=str,
-        default="calexp",
+        default="preliminary_visit_image",
     )
     add_metadata = pexConfig.Field(
         doc="Annotate the cutouts with catalog metadata, including coordinates, fluxes, flags, etc.",
@@ -796,11 +799,6 @@ def build_argparser():
     )
 
     parser.add_argument(
-        "--instrument",
-        required=True,
-        help="Instrument short-name (e.g. 'DECam') of the data being loaded.",
-    )
-    parser.add_argument(
         "-C",
         "--configFile",
         help="File containing the PlotImageSubtractionCutoutsConfig to load.",
@@ -835,13 +833,11 @@ def build_argparser():
     return parser
 
 
-def _make_apdbQuery(instrument, sqlitefile=None, postgres_url=None, namespace=None):
+def _make_apdbQuery(sqlitefile=None, postgres_url=None, namespace=None):
     """Return a query connection to the specified APDB.
 
     Parameters
     ----------
-    instrument : `lsst.obs.base.Instrument`
-        Instrument associated with this data, to get detector/visit data.
     sqlitefile : `str`, optional
         SQLite file to load APDB from; if set, postgres kwargs are ignored.
     postgres_url : `str`, optional
@@ -860,9 +856,9 @@ def _make_apdbQuery(instrument, sqlitefile=None, postgres_url=None, namespace=No
         Raised if the APDB connection kwargs are invalid in some way.
     """
     if sqlitefile is not None:
-        apdb_query = apdb.ApdbSqliteQuery(sqlitefile, instrument=instrument)
+        apdb_query = apdb.ApdbSqliteQuery(sqlitefile)
     elif postgres_url is not None and namespace is not None:
-        apdb_query = apdb.ApdbPostgresQuery(namespace, postgres_url, instrument=instrument)
+        apdb_query = apdb.ApdbPostgresQuery(namespace, postgres_url)
     else:
         raise RuntimeError("Cannot handle database connection args: "
                            f"sqlitefile={sqlitefile}, postgres_url={postgres_url}, namespace={namespace}")
@@ -949,8 +945,7 @@ def run_cutouts(args):
     )
 
     butler = lsst.daf.butler.Butler(args.repo, collections=args.collections)
-    apdb_query = _make_apdbQuery(args.instrument,
-                                 sqlitefile=args.sqlitefile,
+    apdb_query = _make_apdbQuery(sqlitefile=args.sqlitefile,
                                  postgres_url=args.postgres_url,
                                  namespace=args.namespace)
 
