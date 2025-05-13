@@ -19,16 +19,18 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-__all__ = ["make_simbad_link", "compare_sources"]
+__all__ = ["make_simbad_link", "compare_sources", "display_images", "get_xy_from_source_table"]
 
 import astropy.coordinates as coord
 from astropy.coordinates import SkyCoord, match_coordinates_sky
 from astroquery.simbad import Simbad
 import astropy.units as u
+import astropy.table
 import os
 import pandas as pd
 import numpy as np
 
+import lsst.afw.display
 from lsst.analysis.ap import plotImageSubtractionCutouts
 from IPython.display import display, Image, Markdown
 
@@ -273,3 +275,87 @@ def compare_sources(butler1, butler2, query1, query2,
         _ = unique2.pop('pathexists')
 
     return unique1, unique2, matched
+
+
+def get_xy_from_source_table(table, wcs, degrees=False):
+    """Convert ra/dec coordinates in an astropy table/pandas data frame to
+    pixel x/y positions.
+    """
+    ra = table['coord_ra']
+    dec = table['coord_dec']
+    x, y = wcs.skyToPixelArray(ra, dec, degrees=degrees)
+    return astropy.table.Table.from_pandas(pd.DataFrame({'x': x, 'y': y}))
+
+
+def display_images(butler, visit, detector, backend="firefly"):
+    """Display the science/template/difference images for a given
+    visit+detector, with sources and mask planes overlaid.
+
+    Parameters
+    ----------
+    butler : `lsst.daf.butler.Butler`
+        Butler to load data from.
+    visit, detector : `int`
+        Visit and detector ids to load data for.
+    backend : str, optional
+        afw display backend to display to (typically "firefly" or "ds9").
+
+    Notes
+    -----
+    There are some unused variables in here that could be made useable with
+    boolean kwargs to define what is being displayed.
+    """
+    diffim = butler.get("difference_image", visit=visit, detector=detector)
+    science = butler.get("preliminary_visit_image", visit=visit, detector=detector)
+    template = butler.get("template_detector", visit=visit, detector=detector)
+    images = {"difference": diffim, "science": science, "template": template}
+    # red
+    unfiltered = butler.get("dia_source_unfiltered", visit=visit, detector=detector)
+    rejected = butler.get("rejected_dia_source", visit=visit, detector=detector)
+    trailed = butler.get("long_trailed_source_detector", visit=visit, detector=detector)
+    # yellow
+    candidate = butler.get("dia_source_unstandardized", visit=visit, detector=detector)
+    standardized = butler.get("dia_source_detector", visit=visit, detector=detector)  # noqa
+
+    dia_source = butler.get("dia_source_apdb", visit=visit, detector=detector)
+    good = dia_source['reliability'] > 0.1
+    # blue
+    good_source = dia_source[good]
+    # red
+    bad_source = dia_source[~good]
+    print(f"{len(unfiltered)} unfiltered")
+    print(f"{len(trailed)} trailed")
+    print(f"{len(candidate)} candidate")
+    print(f"{len(bad_source)} low reliability diaSources")
+    print(f"{len(good_source)} good diaSources")
+
+    marginal = butler.get("marginal_new_dia_source", visit=visit, detector=detector)  # noqa
+    ss_source_detector = butler.get("ss_source_detector", visit=visit, detector=detector)  # noqa
+    sky_source = unfiltered["sky_source"]
+
+    rejected = get_xy_from_source_table(rejected, diffim.wcs)
+    candidate = get_xy_from_source_table(candidate, diffim.wcs)
+    unfiltered = get_xy_from_source_table(unfiltered[~sky_source], diffim.wcs)
+    trailed = get_xy_from_source_table(trailed, diffim.wcs)
+    display = lsst.afw.display.Display(backend=backend)
+    for frame, label in enumerate(("science", "template", "difference")):
+        display.frame = frame
+        display.image(images[label], title=label)
+        with display.Buffering():
+            for x, y in zip(unfiltered["x"].data, unfiltered["y"].data):
+                display.dot("+", x, y, size=10, ctype="red")
+            for x, y in zip(trailed["x"].data, trailed["y"].data):
+                display.dot("x", x, y, size=30, ctype="red")
+            for x, y in zip(candidate["x"].data, candidate["y"].data):
+                display.dot("+", x, y, size=10, ctype="yellow")
+            for x, y in zip(dia_source["x"].data, dia_source["y"].data):
+                display.dot("+", x, y, size=10, ctype="blue")
+            for x, y in zip(good_source["x"].data, good_source["y"].data):
+                display.dot("o", x, y, size=10, ctype="blue")
+            for x, y in zip(bad_source["x"].data, bad_source["y"].data):
+                display.dot("o", x, y, size=10, ctype="red")
+
+    try:
+        display.alignImages(match_type="Pixel")
+    except NotImplementedError:
+        print(f"WARNING: cannot automatically align and lock images with backend={backend}!")
