@@ -95,6 +95,9 @@ class DbCassandraQuery(DbQuery):
             )
         self._apdb = apdb
 
+        # NOTE: not getting instrument here, as I don't know the interface for
+        # it and we don't want to rely on Cassandra for any analysis tooling.
+
     def set_excluded_diaSource_flags(self, flag_list: list[str]) -> None:
         # Docstring is inherited from base class.
         for flag in flag_list:
