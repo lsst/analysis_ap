@@ -457,6 +457,8 @@ class DbSqlQuery(DbQuery):
         table = self._tables["DiaObject"]
         if latest:
             query = table.select().where(table.columns["validityEnd"] == None)  # noqa: E711
+        else:
+            query = table.select()
         query = query.order_by(table.columns["diaObjectId"])
         if limit is not None:
             query = query.limit(limit)
