@@ -23,22 +23,17 @@ from __future__ import annotations
 
 __all__ = ["DbCassandraQuery"]
 
-import os
 import warnings
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import pandas as pd
 
-import lsst.utils
 from lsst.ap.association import UnpackApdbFlags
 from lsst.dax.apdb import Apdb, ApdbCassandra, ApdbTables
 from lsst.dax.apdb.cassandra.cassandra_utils import quote_id
 from lsst.pipe.base import Instrument
-from lsst.resources import ResourcePathExpression
+from lsst.resources import ResourcePath, ResourcePathExpression
 from .apdb import DbQuery
-
-if TYPE_CHECKING:
-    import lsst.daf.butler
 
 
 class DbCassandraQuery(DbQuery):
@@ -70,8 +65,8 @@ class DbCassandraQuery(DbQuery):
     ):
         self._instrument = instrument
 
-        flag_map = os.path.join(
-            lsst.utils.getPackageDir("ap_association"), "data/association-flag-map.yaml"
+        flag_map = ResourcePath(
+            "resource://lsst.ap.association/resources/data/association-flag-map.yaml"
         )
         self._unpacker = UnpackApdbFlags(flag_map, "DiaSource")
 
