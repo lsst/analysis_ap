@@ -26,6 +26,7 @@ from astropy.coordinates import SkyCoord, match_coordinates_sky
 from astroquery.simbad import Simbad
 import astropy.units as u
 import astropy.table
+import functools
 import os
 import pandas as pd
 import numpy as np
@@ -33,6 +34,19 @@ import numpy as np
 import lsst.afw.display
 from lsst.analysis.ap import plotImageSubtractionCutouts
 from IPython.display import display, Image, Markdown
+
+
+def _cutout_exists(cpath, dia_source_id):
+    """Return True if a cutout PNG for this diaSourceId already exists.
+
+    Parameters
+    ----------
+    cpath : `~plotImageSubtractionCutouts.CutoutPath`
+        Path manager for the cutout directory.
+    dia_source_id : `int`
+        DiaSourceId whose ``{id}.png`` is checked.
+    """
+    return cpath.exists(dia_source_id, f"{dia_source_id}.png")
 
 
 def make_simbad_link(ra, dec, radius_arcsec=3.0):
@@ -250,19 +264,15 @@ def compare_sources(butler1, butler2, query1, query2,
         plotter2 = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(
             output_path=cutout_path2, config=config2)
 
-        # First figure out which cutouts already exist at the output path
-        unique1['pathexists'] = False
-        for i in range(len(unique1)):
-            dId = unique1.iloc[i]['diaSourceId']
-            idx = unique1.index[i]
-            unique1.at[idx, 'pathexists'] = os.path.exists(cpath1(dId, f"{dId}.png"))
+        # First figure out which cutouts already exist at the output path.
+        # Series.apply passes one positional argument (the diaSourceId), but
+        # _cutout_exists also needs the per-dataset cpath; partial binds it.
+        unique1['pathexists'] = unique1['diaSourceId'].apply(
+            functools.partial(_cutout_exists, cpath1))
         pathchk1 = unique1.loc[~unique1['pathexists']]
 
-        unique2['pathexists'] = False
-        for i in range(len(unique2)):
-            dId = unique2.iloc[i]['diaSourceId']
-            idx = unique2.index[i]
-            unique2.at[idx, 'pathexists'] = os.path.exists(cpath2(dId, f"{dId}.png"))
+        unique2['pathexists'] = unique2['diaSourceId'].apply(
+            functools.partial(_cutout_exists, cpath2))
         pathchk2 = unique2.loc[~unique2['pathexists']]
 
         # Only write those that don't exist yet
