@@ -43,7 +43,6 @@ import lsst.pipe.base
 import lsst.utils
 import numpy as np
 import pandas as pd
-import sqlalchemy
 
 from . import apdb
 
@@ -868,69 +867,6 @@ def _make_apdbQuery(sqlitefile=None, postgres_url=None, namespace=None):
     return apdb_query
 
 
-def select_sources(apdb_query, limit, reliabilityMin=None, reliabilityMax=None):
-    """Load an APDB and return n sources from it.
-
-    Parameters
-    ----------
-    apdb_query : `lsst.analysis.ap.ApdbQuery`
-        APDB query interface to load from.
-    limit : `int`
-        Number of sources to select from the APDB.
-    reliabilityMin : `float`
-        Minimum reliability value on which to filter the DiaSources.
-    reliabilityMax : `float`
-        Maximum reliability value on which to filter the DiaSources.
-
-    Returns
-    -------
-    sources : `pandas.DataFrame`
-        The loaded DiaSource data.
-    """
-    offset = 0
-    while True:
-        with apdb_query.connection as connection:
-            table = apdb_query._tables["DiaSource"]
-            query = table.select()
-            if reliabilityMin is not None:
-                query = query.where(table.columns['reliability'] >= reliabilityMin)
-            if reliabilityMax is not None:
-                query = query.where(table.columns['reliability'] <= reliabilityMax)
-            query = query.order_by(table.columns["visit"],
-                                   table.columns["detector"],
-                                   table.columns["diaSourceId"])
-            query = query.limit(limit).offset(offset)
-            sources = pd.read_sql_query(query, connection)
-        if len(sources) == 0:
-            break
-        apdb_query._fill_from_instrument(sources)
-
-        yield sources
-        offset += limit
-
-
-def len_sources(apdb_query, namespace=None):
-    """Return the number of DiaSources in the supplied APDB.
-
-    Parameters
-    ----------
-    apdb_query : `lsst.analysis.ap.ApdbQuery`
-        APDB query interface to load from.
-    namespace : `str`, optional
-        Postgres schema to load data from.
-
-    Returns
-    -------
-    count : `int`
-        Number of diaSources in this APDB.
-    """
-    with apdb_query.connection as connection:
-        if namespace:
-            connection.execute(sqlalchemy.text(f"SET search_path TO {namespace}"))
-        count = connection.execute(sqlalchemy.text('select count(*) FROM "DiaSource";')).scalar()
-    return count
-
-
 def run_cutouts(args):
     """Run PlotImageSubtractionCutoutsTask on the parsed commandline arguments.
 
@@ -957,7 +893,7 @@ def run_cutouts(args):
 
     if config.save_as_numpy:
         # save the RB output up front so we can use partial runs
-        data = select_sources(apdb_query, args.limit, args.reliabilityMin, args.reliabilityMax)
+        data = apdb_query.iter_sources(args.limit, args.reliabilityMin, args.reliabilityMax)
         cols_to_export = ["diaSourceId", "visit", "detector", "diaObjectId",
                           "ssObjectId", "midpointMjdTai", "ra", "dec", "x", "y",
                           "apFlux", "apFluxErr", "snr", "psfFlux", "psfFluxErr",
@@ -972,14 +908,14 @@ def run_cutouts(args):
         all_data = pd.concat([d[cols_to_export] for d in data])
         all_data.to_csv(os.path.join(args.outputPath, "all_diasources.csv.gz"), index=False)
 
-    getter = select_sources(apdb_query, args.limit, args.reliabilityMin, args.reliabilityMax)
+    getter = apdb_query.iter_sources(args.limit, args.reliabilityMin, args.reliabilityMax)
     # Process just one block of length "limit", or all sources in the database?
     if not args.all:
         data = next(getter)
         sources = cutouts.run(data, butler, njobs=args.jobs)
     else:
         sources = []
-        count = len_sources(apdb_query, args.namespace)
+        count = apdb_query.count_sources()
         for i, data in enumerate(getter):
             sources.extend(cutouts.write_images(data, butler, njobs=args.jobs))
             print(f"Completed {i+1} batches of {args.limit} size, out of {count} diaSources.")
