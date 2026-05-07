@@ -47,6 +47,8 @@ import sqlalchemy
 
 from . import apdb
 
+_log = logging.getLogger(__name__)
+
 
 class _ButlerCache:
     """Global class to handle butler queries, to allow lru_cache and
@@ -96,9 +98,9 @@ class _ButlerCache:
         try:
             science = self._butler.get(self._config.science_image_type, data_id)
         except DatasetNotFoundError as e:
-            self.log.error(f"Cannot load {self._config.science_image_type} with data_id {data_id}: {e}")
-            self.log.error("If you are working with data processed earlier than May 2025, try setting "
-                           "config.science_image_type = 'initial_pvi' or 'calexp'.")
+            _log.error(f"Cannot load {self._config.science_image_type} with data_id {data_id}: {e}")
+            _log.error("If you are working with data processed earlier than May 2025, try setting "
+                       "config.science_image_type = 'initial_pvi' or 'calexp'.")
             raise
 
         if self._config.diff_image_type is not None:
@@ -311,11 +313,12 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
             with multiprocessing.Pool(njobs) as pool:
                 sources = pool.map(self._do_one_source, data.to_records(index=indexNotInColumns))
         else:
-            for i, source in enumerate(data.to_records(index=indexNotInColumns)):
-                if not self.cutout_path.exists(source["diaSourceId"],
-                                               f'{source["diaSourceId"]}.png'):
-                    id = self._do_one_source(source)
-                sources.append(id)
+            for source in data.to_records(index=indexNotInColumns):
+                src_id = source["diaSourceId"]
+                if self.cutout_path.exists(src_id, f"{src_id}.png"):
+                    sources.append(src_id)
+                else:
+                    sources.append(self._do_one_source(source))
 
         # restore numpy error message state
         np.seterr(**seterr_dict)
@@ -885,28 +888,25 @@ def select_sources(apdb_query, limit, reliabilityMin=None, reliabilityMax=None):
         The loaded DiaSource data.
     """
     offset = 0
-    try:
-        while True:
-            with apdb_query.connection as connection:
-                table = apdb_query._tables["DiaSource"]
-                query = table.select()
-                if reliabilityMin is not None:
-                    query = query.where(table.columns['reliability'] >= reliabilityMin)
-                if reliabilityMax is not None:
-                    query = query.where(table.columns['reliability'] <= reliabilityMax)
-                query = query.order_by(table.columns["visit"],
-                                       table.columns["detector"],
-                                       table.columns["diaSourceId"])
-                query = query.limit(limit).offset(offset)
-                sources = pd.read_sql_query(query, connection)
-            if len(sources) == 0:
-                break
-            apdb_query._fill_from_instrument(sources)
+    while True:
+        with apdb_query.connection as connection:
+            table = apdb_query._tables["DiaSource"]
+            query = table.select()
+            if reliabilityMin is not None:
+                query = query.where(table.columns['reliability'] >= reliabilityMin)
+            if reliabilityMax is not None:
+                query = query.where(table.columns['reliability'] <= reliabilityMax)
+            query = query.order_by(table.columns["visit"],
+                                   table.columns["detector"],
+                                   table.columns["diaSourceId"])
+            query = query.limit(limit).offset(offset)
+            sources = pd.read_sql_query(query, connection)
+        if len(sources) == 0:
+            break
+        apdb_query._fill_from_instrument(sources)
 
-            yield sources
-            offset += limit
-    finally:
-        connection.close()
+        yield sources
+        offset += limit
 
 
 def len_sources(apdb_query, namespace=None):
