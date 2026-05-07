@@ -141,10 +141,21 @@ def compare_sources(butler1, butler2, query1, query2,
         raise ValueError(errstr)
 
     if bad_flag_list is not None:
+        # Snapshot and restore so we don't leave the caller's queries with a
+        # different exclusion list than they started with.
+        saved_flags1 = list(query1.diaSource_flags_exclude)
+        saved_flags2 = list(query2.diaSource_flags_exclude)
         query1.set_excluded_diaSource_flags(bad_flag_list)
         query2.set_excluded_diaSource_flags(bad_flag_list)
-    goodSrc1 = query1.load_sources(exclude_flagged=True)
-    goodSrc2 = query2.load_sources(exclude_flagged=True)
+        try:
+            goodSrc1 = query1.load_sources(exclude_flagged=True)
+            goodSrc2 = query2.load_sources(exclude_flagged=True)
+        finally:
+            query1.set_excluded_diaSource_flags(saved_flags1)
+            query2.set_excluded_diaSource_flags(saved_flags2)
+    else:
+        goodSrc1 = query1.load_sources(exclude_flagged=True)
+        goodSrc2 = query2.load_sources(exclude_flagged=True)
 
     if 'reliability' not in goodSrc1.columns:
         goodSrc1['reliability'] = None
