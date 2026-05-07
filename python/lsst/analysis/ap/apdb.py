@@ -321,6 +321,8 @@ class DbSqlQuery(DbQuery):
         query = query.order_by(table.columns["visit"],
                                table.columns["detector"],
                                table.columns["diaSourceId"])
+        if limit is not None:
+            query = query.limit(limit)
         with self.connection as connection:
             result = pd.read_sql_query(query, connection)
 
@@ -353,6 +355,8 @@ class DbSqlQuery(DbQuery):
         query = query.order_by(table.columns["visit"],
                                table.columns["detector"],
                                table.columns["diaForcedSourceId"])
+        if limit is not None:
+            query = query.limit(limit)
         with self.connection as connection:
             result = pd.read_sql_query(query, connection)
 
