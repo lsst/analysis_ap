@@ -31,3 +31,4 @@ from .compare import *
 from .imageQA import *
 from .spatiallySampledMetricsQA import *
 from .plotUtils import *
+from .taskRuntimes import *
