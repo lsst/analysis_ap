@@ -19,21 +19,37 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-__all__ = ["make_simbad_link", "compare_sources", "display_images", "get_xy_from_source_table"]
+from __future__ import annotations
+
+__all__ = ["make_simbad_link", "compare_sources", "display_images", "display_images_ab",
+           "get_xy_from_source_table", "extract_timestamped_messages"]
 
 import astropy.coordinates as coord
-from astropy.coordinates import SkyCoord, match_coordinates_sky
 from astroquery.simbad import Simbad
 import astropy.units as u
 import astropy.table
+from datetime import datetime, timezone
 import functools
+import json
+import numpy as np
 import os
 import pandas as pd
-import numpy as np
+from typing import Any
 
 import lsst.afw.display
+from lsst.daf.butler import DatasetNotFoundError
 from lsst.analysis.ap import plotImageSubtractionCutouts
+from lsst.analysis.ap.compare import match_catalogs
 from IPython.display import display, Image, Markdown
+
+
+# Maps the image_type kwarg used by `display_images` to butler dataset
+# names.
+_IMAGE_DATASETS = {
+    "science": "preliminary_visit_image",
+    "template": "template_detector",
+    "difference": "difference_image",
+}
 
 
 def _cutout_exists(cpath, dia_source_id):
@@ -145,9 +161,10 @@ def compare_sources(butler1, butler2, query1, query2,
     unique2 : `pandas.DataFrame`
         Data frame of sources only found in the second dataset.
     matched : `pandas.DataFrame`
-        Data frame of matched sources; actually only the sources from
-        the first dataset but with a new column pointing to the
-        diaSourceId of the match in the decond dataset.
+        Data frame of matched sources; the rows are sources from the first
+        dataset, with two columns added: ``src2_diaSourceId`` pointing to
+        the matched diaSourceId in the second dataset, and
+        ``xmatch_dist_arcsec`` giving the on-sky separation in arcseconds.
     """
 
     if make_cutouts and (cutout_path1 is None or cutout_path2 is None):
@@ -176,60 +193,14 @@ def compare_sources(butler1, butler2, query1, query2,
     if 'reliability' not in goodSrc2.columns:
         goodSrc2['reliability'] = None
 
-    """
-    We assume that the runs to be compared here will always be
-    over the same dataset with the same visit and detector numbers.
-    Then we can enforce the matching on that level, too.
-    We could relax that assumption later, though it would require
-    removing the visit, detector loop.
-    """
-
-    visit_det = set(zip(goodSrc1['visit'], goodSrc1['detector']))
-    src1 = []
-    src2 = []
-    matches = []
-    indices = {}
-    seps = {}
-
-    for visit, detector in visit_det:
-        mask1 = (goodSrc1['visit'] == visit) &\
-            (goodSrc1['detector'] == detector)
-        mask2 = (goodSrc2['visit'] == visit) &\
-            (goodSrc2['detector'] == detector)
-        gs1 = goodSrc1[mask1].copy()
-        gs2 = goodSrc2[mask2].copy()
-
-        coords1 = SkyCoord(ra=gs1['ra'].values*u.degree,
-                           dec=gs1['dec'].values*u.degree)
-        coords2 = SkyCoord(ra=gs2['ra'].values*u.degree,
-                           dec=gs2['dec'].values*u.degree)
-
-        index, sep, _ = match_coordinates_sky(coords1, coords2)
-        indices[(visit, detector)] = index
-        seps[(visit, detector)] = sep
-        gs1['xmatch_dist_arcsec'] = sep.to_value(u.arcsecond)
-        gs1['src2_diaSourceId'] = gs2['diaSourceId'].values.astype(np.int64)[index]
-
-        # Set the match ID to 0 if the distance is above threshold
-        gs1.loc[(gs1['xmatch_dist_arcsec'] > match_radius),
-                ['src2_diaSourceId']] = 0
-
-        # get the DiaSources in dataset 2 not matched to something in dataset 1
-        uniqueid2 = set(gs2['diaSourceId']) - set(gs1['src2_diaSourceId'])
-        unique2 = gs2[gs2['diaSourceId'].isin(uniqueid2)]
-
-        unique1 = gs1[(gs1['src2_diaSourceId'] == 0)]
-
-        withmatch = gs1[(gs1['src2_diaSourceId'] > 0)]
-
-        src1.append(unique1)
-        src2.append(unique2)
-        matches.append(withmatch)
-
-    # Out of the loop, concatenate everything together.
-    unique1 = pd.concat(src1)
-    unique2 = pd.concat(src2)
-    matched = pd.concat(matches)
+    # Cross-match within each (visit, detector) group.
+    matched, unique1, unique2 = match_catalogs(
+        goodSrc1, goodSrc2,
+        radius=match_radius * u.arcsec,
+        on=("visit", "detector"),
+    )
+    # Preserve the legacy column name on the returned `matched` DataFrame.
+    matched = matched.rename(columns={"diaSourceId_2": "src2_diaSourceId"})
 
     print("{} matched sources; {} unique to set 1; {} unique to set 2.".format(
         len(matched), len(unique1), len(unique2)))
@@ -298,19 +269,264 @@ def compare_sources(butler1, butler2, query1, query2,
     return unique1, unique2, matched
 
 
-def get_xy_from_source_table(table, wcs, degrees=False):
+def get_xy_from_source_table(table, wcs, degrees=None):
     """Convert ra/dec coordinates in an astropy table/pandas data frame to
     pixel x/y positions.
     """
-    ra = table['coord_ra']
-    dec = table['coord_dec']
+    try:
+        ra = table['ra']
+        dec = table['dec']
+        inferred_degrees = True
+    except KeyError:
+        ra = table['coord_ra']
+        dec = table['coord_dec']
+        inferred_degrees = False
+    if degrees is None:
+        degrees = inferred_degrees
+
     x, y = wcs.skyToPixelArray(ra, dec, degrees=degrees)
     return astropy.table.Table.from_pandas(pd.DataFrame({'x': x, 'y': y}))
 
 
-def display_images(butler, visit, detector, backend="firefly"):
-    """Display the science/template/difference images for a given
-    visit+detector, with sources and mask planes overlaid.
+# Palette used by the `color_by` flag-bucketing mode. Sources with none of
+# the requested flags set get the residual color "white", which is kept out
+# of this palette so it never collides with a flagged bucket.
+_FLAG_PALETTE = ("red", "orange", "yellow", "magenta", "cyan", "green")
+
+
+def _group_sources_by_flag(table, flag_names, palette=_FLAG_PALETTE):
+    """Split a source table into per-flag buckets for color-coded overlay.
+
+    Each row is assigned to the first flag in ``flag_names`` whose column
+    is True; remaining rows go into a residual "no flag" bucket. Names that
+    aren't present as columns in ``table`` are silently skipped.
+
+    Parameters
+    ----------
+    table : table-like
+        Anything that supports ``len(table)``, ``table[name]`` returning a
+        boolean-coercible column, and ``table[bool_array]`` row selection.
+    flag_names : sequence of str
+        Column names to group on. Order determines color *and* priority
+        when a row has multiple flags set.
+    palette : sequence of str, optional
+        Cycle of display ``ctype`` values to assign in order.
+
+    Returns
+    -------
+    buckets : list of ``(subset_table, ctype, legend)`` tuples.
+    """
+    n = len(table)
+    if n == 0:
+        return []
+    remaining = np.ones(n, dtype=bool)
+    buckets = []
+    for i, flag in enumerate(flag_names):
+        try:
+            col = table[flag]
+        except KeyError:
+            continue
+        mask = np.asarray(col, dtype=bool) & remaining
+        if mask.any():
+            buckets.append((table[mask], palette[i % len(palette)], flag))
+            remaining = remaining & ~mask
+    if remaining.any():
+        buckets.append((table[remaining], "white", "no flag"))
+    return buckets
+
+
+def _collect_overlays(butler, data_id, wcs, *,
+                      reliability_threshold,
+                      show_unfiltered, show_trailed,
+                      show_rejected, show_marginal, show_solar_system,
+                      show_apdb, show_reliability_labels,
+                      color_by):
+    """Load catalogs from one butler and build the overlay record list.
+
+    Shared between `display_images` and `display_images_ab`. Catalogs that
+    aren't present for this dataId are silently skipped.
+
+    Returns
+    -------
+    overlays : list of ``(x_arr, y_arr, symbol, size, ctype, legend)`` tuples.
+    reliability_labels : dict or None
+        ``{"x", "y", "reliability"}`` arrays for the good APDB diaSources,
+        suitable for drawing text annotations next to each marker.
+    solar_system_labels : dict or None
+        ``{"x", "y", "designation"}`` arrays for matched solar-system
+        sources, suitable for drawing the designation as text next to each
+        marker.
+    """
+    def _try_get(dataset):
+        try:
+            return butler.get(dataset, data_id)
+        except DatasetNotFoundError:
+            return None
+
+    overlays = []
+
+    def _add(table, *, symbol, size, ctype, legend, use_radec=True):
+        if table is None or len(table) == 0:
+            return
+        if use_radec:
+            xy = get_xy_from_source_table(table, wcs)
+            x_arr = xy["x"].data
+            y_arr = xy["y"].data
+        else:
+            x_arr = table["x"].data
+            y_arr = table["y"].data
+        overlays.append((x_arr, y_arr, symbol, size, ctype, legend))
+
+    if show_unfiltered:
+        unfiltered = _try_get("dia_source_unfiltered")
+        if unfiltered is not None and len(unfiltered) > 0:
+            non_sky = unfiltered[~unfiltered["sky_source"]]
+            if color_by:
+                for sub, ctype, flag in _group_sources_by_flag(non_sky, color_by):
+                    _add(sub, symbol="+", size=10, ctype=ctype,
+                         legend=f"unfiltered: {flag}")
+            else:
+                _add(non_sky, symbol="+", size=10, ctype="red",
+                     legend="unfiltered candidate")
+
+    if show_trailed:
+        _add(_try_get("long_trailed_source_detector"),
+             symbol="x", size=30, ctype="magenta", legend="long-trailed source")
+    if show_rejected:
+        _add(_try_get("rejected_dia_source"),
+             symbol="+", size=10, ctype="orange", legend="rejected diaSource")
+    if show_marginal:
+        _add(_try_get("marginal_new_dia_source"),
+             symbol="+", size=10, ctype="yellow", legend="marginal new diaSource")
+
+    # Load dia_source_apdb once: it backs the APDB reliability overlay and
+    # also supplies pixel x/y for the solar-system overlay (ss_source_detector
+    # carries only the matched diaSourceId, not coordinates).
+    dia_apdb = None
+    if show_solar_system or show_apdb:
+        dia_apdb = _try_get("dia_source_apdb")
+
+    solar_system_labels = None
+    if show_solar_system:
+        ss = _try_get("ss_source_detector")
+        if (ss is not None and len(ss) > 0
+                and dia_apdb is not None and len(dia_apdb) > 0):
+            # ss_source_detector lacks coords; match each diaSourceId to
+            # the APDB row to recover its pixel x/y.
+            ss_ids = np.asarray(ss["diaSourceId"])
+            apdb_ids = np.asarray(dia_apdb["diaSourceId"])
+            idx_in_apdb = pd.Series(np.arange(len(apdb_ids)), index=apdb_ids).reindex(ss_ids)
+            keep = idx_in_apdb.notna().to_numpy()
+            if keep.any():
+                apdb_idx = idx_in_apdb.dropna().astype(int).to_numpy()
+                x_arr = np.asarray(dia_apdb["x"])[apdb_idx]
+                y_arr = np.asarray(dia_apdb["y"])[apdb_idx]
+                designation = np.asarray(ss["designation"])[keep]
+                overlays.append((x_arr, y_arr, "o", 12, "cyan", "solar-system match"))
+                solar_system_labels = {"x": x_arr, "y": y_arr, "designation": designation, }
+
+    reliability_labels = None
+    if show_apdb:
+        if dia_apdb is not None and len(dia_apdb) > 0:
+            good_mask = dia_apdb["reliability"] > reliability_threshold
+            good_src = dia_apdb[good_mask]
+            bad_src = dia_apdb[~good_mask]
+            _add(good_src, symbol="o", size=12, ctype="blue", use_radec=False,
+                 legend=f"APDB, reliability > {reliability_threshold:g}")
+            _add(bad_src, symbol="o", size=12, ctype="red", use_radec=False,
+                 legend=f"APDB, reliability <= {reliability_threshold:g}")
+            if show_reliability_labels and len(good_src) > 0:
+                reliability_labels = {
+                    "x": good_src["x"].data,
+                    "y": good_src["y"].data,
+                    "reliability": good_src["reliability"],
+                }
+
+    return overlays, reliability_labels, solar_system_labels
+
+
+def _print_overlay_legend(overlays, header, indent=""):
+    """Print a one-line-per-overlay legend for a single panel."""
+    print(f"{indent}{header}")
+    for x_arr, _, symbol, _, ctype, legend in overlays:
+        print(f"{indent}  {len(x_arr):5d}  {ctype:>8s} {symbol}  {legend}")
+
+
+def _draw_overlays_on_current_frame(afw_display, overlays,
+                                    reliability_labels, solar_system_labels,
+                                    label_size=3):
+    """Stamp one set of overlays + optional reliability and solar-system
+    designation labels onto the active frame.
+
+    ``label_size`` is the text size (in pixels) used for both label sets.
+    """
+    # Scale the text offset with the size so larger labels still clear the
+    # circle markers they annotate.
+    label_offset = max(14, 2 * label_size)
+    with afw_display.Buffering():
+        for x_arr, y_arr, symbol, size, ctype, _ in overlays:
+            for x, y in zip(x_arr, y_arr):
+                afw_display.dot(symbol, x, y, size=size, ctype=ctype)
+        if reliability_labels is not None:
+            # Offset the score text so it doesn't sit on top of the marker.
+            for r, x, y in zip(reliability_labels["reliability"],
+                               reliability_labels["x"],
+                               reliability_labels["y"]):
+                afw_display.dot(f"{r:.2f}", x + label_offset, y,
+                                size=label_size, ctype="cyan")
+        if solar_system_labels is not None:
+            # Offset SS designations *below* the marker so they don't
+            # overplot any reliability score drawn to the right.
+            for desig, x, y in zip(solar_system_labels["designation"],
+                                   solar_system_labels["x"],
+                                   solar_system_labels["y"]):
+                afw_display.dot(str(desig), x, y + label_offset,
+                                size=label_size, ctype="cyan")
+
+
+def _strip_ds9_metadata(*exposures):
+    """Drop LTV1/LTV2 keys from each exposure's metadata in place."""
+    for exp in exposures:
+        md = exp.metadata
+        for k in ("LTV1", "LTV2"):
+            if md.exists(k):
+                md.remove(k)
+
+
+def display_images(butler, visit, detector, backend="firefly", *,
+                   reliability_threshold=0.1,
+                   show_unfiltered=True,
+                   show_trailed=True,
+                   show_rejected=True,
+                   show_marginal=True,
+                   show_solar_system=True,
+                   show_apdb=True,
+                   show_reliability_labels=True,
+                   label_size=3,
+                   color_by=None,
+                   mask_transparency=80,
+                   strip_metadata=True,
+                   image_datasets=_IMAGE_DATASETS):
+    """Display the science, template, and difference images for a given
+    visit+detector with diagnostic catalog markers overlaid.
+
+    Three frames are produced (science, template, difference) and the same
+    overlays are drawn on each. Catalogs that are missing from the butler
+    are silently skipped, so the same call works against partial outputs.
+
+    Default overlay key:
+
+    ============================  =======  ==========================
+    catalog                       symbol   color
+    ============================  =======  ==========================
+    unfiltered candidates         ``+``    red
+    long-trailed sources          ``x``    magenta
+    rejected diaSources           ``+``    orange
+    marginal new diaSources       ``+``    yellow
+    solar-system matches          ``o``    cyan
+    APDB, reliability > threshold ``o``    blue (+ score text)
+    APDB, reliability ≤ threshold ``o``    red
+    ============================  =======  ==========================
 
     Parameters
     ----------
@@ -318,65 +534,225 @@ def display_images(butler, visit, detector, backend="firefly"):
         Butler to load data from.
     visit, detector : `int`
         Visit and detector ids to load data for.
-    backend : str, optional
-        afw display backend to display to (typically "firefly" or "ds9").
+    backend : `str`, optional
+        afw display backend (typically "firefly" or "ds9").
+    reliability_threshold : `float`, optional
+        APDB diaSources with reliability strictly greater than this are
+        drawn as "good" (blue); the rest as "bad" (red).
+    show_unfiltered, show_trailed, show_rejected, show_marginal,
+    show_solar_system, show_apdb : `bool`, optional
+        Toggle individual catalog overlays.
+    show_reliability_labels : `bool`, optional
+        If True, annotate each good APDB diaSource with its reliability score.
+    label_size : `int`, optional
+        Text size (in pixels) for the reliability score and solar-system
+        designation annotations.
+    color_by : sequence of `str`, optional
+        Flag column names from ``dia_source_unfiltered``. When supplied,
+        the unfiltered-candidate overlay is split into buckets colored by
+        which named flag fires first (list order = color *and* priority),
+        with a residual white bucket for rows that match none of them.
+        Unknown column names are silently skipped. Example::
 
-    Notes
-    -----
-    There are some unused variables in here that could be made useable with
-    boolean kwargs to define what is being displayed.
+            color_by=["pixelFlags_bad", "pixelFlags_edge",
+                      "ip_diffim_DipoleFit_classification",
+                      "pixelFlags_saturated"]
+    mask_transparency : `int` or `None`, optional
+        Mask-plane transparency forwarded to the display (0 = opaque,
+        100 = fully transparent). Pass ``None`` to leave the backend's
+        current setting untouched.
+    strip_metadata : `bool`, optional
+        Drop ``LTV1``/``LTV2`` keywords from each exposure's metadata
+        before sending to the backend. Needed for ds9 to align frames.
+    image_datasets : `dict` [`str`, `str`], optional
+        Mapping from image-type key (``"science"``, ``"template"``,
+        ``"difference"``) to butler dataset name. Override to point at
+        alternate dataset types.
     """
-    diffim = butler.get("difference_image", visit=visit, detector=detector)
-    science = butler.get("preliminary_visit_image", visit=visit, detector=detector)
-    template = butler.get("template_detector", visit=visit, detector=detector)
-    images = {"difference": diffim, "science": science, "template": template}
-    # red
-    unfiltered = butler.get("dia_source_unfiltered", visit=visit, detector=detector)
-    rejected = butler.get("rejected_dia_source", visit=visit, detector=detector)
-    trailed = butler.get("long_trailed_source_detector", visit=visit, detector=detector)
-    # yellow
-    candidate = butler.get("dia_source_unstandardized", visit=visit, detector=detector)
-    standardized = butler.get("dia_source_detector", visit=visit, detector=detector)  # noqa
+    data_id = {"visit": visit, "detector": detector}
 
-    dia_source = butler.get("dia_source_apdb", visit=visit, detector=detector)
-    good = dia_source['reliability'] > 0.1
-    # blue
-    good_source = dia_source[good]
-    # red
-    bad_source = dia_source[~good]
-    print(f"{len(unfiltered)} unfiltered")
-    print(f"{len(trailed)} trailed")
-    print(f"{len(candidate)} candidate")
-    print(f"{len(bad_source)} low reliability diaSources")
-    print(f"{len(good_source)} good diaSources")
+    diffim = butler.get(image_datasets["difference"], data_id)
+    science = butler.get(image_datasets["science"], data_id)
+    template = butler.get(image_datasets["template"], data_id)
+    template = template[science.getBBox()]
+    if strip_metadata:
+        _strip_ds9_metadata(science, diffim, template)
+    images = {"science": science, "template": template, "difference": diffim}
 
-    marginal = butler.get("marginal_new_dia_source", visit=visit, detector=detector)  # noqa
-    ss_source_detector = butler.get("ss_source_detector", visit=visit, detector=detector)  # noqa
-    sky_source = unfiltered["sky_source"]
+    overlays, reliability_labels, solar_system_labels = _collect_overlays(
+        butler, data_id, diffim.wcs,
+        reliability_threshold=reliability_threshold,
+        show_unfiltered=show_unfiltered,
+        show_trailed=show_trailed, show_rejected=show_rejected,
+        show_marginal=show_marginal, show_solar_system=show_solar_system,
+        show_apdb=show_apdb,
+        show_reliability_labels=show_reliability_labels,
+        color_by=color_by,
+    )
+    _print_overlay_legend(
+        overlays, f"visit={visit}, detector={detector} -- overlay legend:")
 
-    rejected = get_xy_from_source_table(rejected, diffim.wcs)
-    candidate = get_xy_from_source_table(candidate, diffim.wcs)
-    unfiltered = get_xy_from_source_table(unfiltered[~sky_source], diffim.wcs)
-    trailed = get_xy_from_source_table(trailed, diffim.wcs)
-    display = lsst.afw.display.Display(backend=backend)
-    for frame, label in enumerate(("science", "template", "difference")):
-        display.frame = frame
-        display.image(images[label], title=label)
-        with display.Buffering():
-            for x, y in zip(unfiltered["x"].data, unfiltered["y"].data):
-                display.dot("+", x, y, size=10, ctype="red")
-            for x, y in zip(trailed["x"].data, trailed["y"].data):
-                display.dot("x", x, y, size=30, ctype="red")
-            for x, y in zip(candidate["x"].data, candidate["y"].data):
-                display.dot("+", x, y, size=10, ctype="yellow")
-            for x, y in zip(dia_source["x"].data, dia_source["y"].data):
-                display.dot("+", x, y, size=10, ctype="blue")
-            for x, y in zip(good_source["x"].data, good_source["y"].data):
-                display.dot("o", x, y, size=10, ctype="blue")
-            for x, y in zip(bad_source["x"].data, bad_source["y"].data):
-                display.dot("o", x, y, size=10, ctype="red")
+    afw_display = lsst.afw.display.Display(backend=backend)
+    if mask_transparency is not None:
+        afw_display.setMaskTransparency(mask_transparency)
+    for frame, image_name in enumerate(("science", "template", "difference")):
+        afw_display.frame = frame
+        afw_display.image(images[image_name], title=image_name)
+        _draw_overlays_on_current_frame(
+            afw_display, overlays, reliability_labels, solar_system_labels,
+            label_size=label_size)
 
     try:
-        display.alignImages(match_type="Pixel")
+        afw_display.alignImages(match_type="Pixel")
     except NotImplementedError:
-        print(f"WARNING: cannot automatically align and lock images with backend={backend}!")
+        print(f"WARNING: cannot automatically align and lock images with backend={backend!r}.")
+
+
+def display_images_ab(butler_a, butler_b, visit, detector, *,
+                      image_type="difference",
+                      labels=("A", "B"),
+                      backend="firefly",
+                      reliability_threshold=0.1,
+                      show_unfiltered=True,
+                      show_trailed=True,
+                      show_rejected=True,
+                      show_marginal=True,
+                      show_solar_system=True,
+                      show_apdb=True,
+                      show_reliability_labels=True,
+                      label_size=3,
+                      color_by=None,
+                      mask_transparency=80,
+                      strip_metadata=True,
+                      image_datasets=_IMAGE_DATASETS):
+    """Display one image type side-by-side from two butlers, with overlays.
+
+    Loads the same (visit, detector) from ``butler_a`` and ``butler_b``,
+    places them in two frames, and draws each butler's catalog overlays on
+    its own frame. Intended for A/B-testing pipeline-config changes that affect
+    detection or subtraction quality.
+
+    Parameters
+    ----------
+    butler_a, butler_b : `lsst.daf.butler.Butler`
+        Two butlers, typically from different pipeline runs of the same data.
+    visit, detector : `int`
+        Visit and detector ids to load data for.
+    image_type : {"science", "template", "difference"}, optional
+        Which image dataset to compare. Default ``"difference"``.
+    labels : pair of `str`, optional
+        Short tags for the two frames; appear in the image title and the
+        legend header. Default ``("A", "B")``.
+    backend : `str`, optional
+        afw display backend (typically "firefly" or "ds9").
+    reliability_threshold, show_unfiltered, show_trailed, show_rejected,
+    show_marginal, show_solar_system, show_apdb, show_reliability_labels,
+    label_size, color_by, mask_transparency, strip_metadata, image_datasets
+        Same meaning as in `display_images`. Applied to overlays from
+        *both* butlers.
+    """
+    if image_type not in image_datasets:
+        raise ValueError(
+            f"image_type must be one of {sorted(image_datasets)}, got {image_type!r}")
+    dataset = image_datasets[image_type]
+    data_id = {"visit": visit, "detector": detector}
+
+    image_a = butler_a.get(dataset, data_id)
+    image_b = butler_b.get(dataset, data_id)
+    if image_type == "template":
+        # Templates are usually larger than the science footprint; clip them
+        # to the science bbox so the two frames have matching extents.
+        sci_a = butler_a.get(image_datasets["science"], data_id)
+        sci_b = butler_b.get(image_datasets["science"], data_id)
+        image_a = image_a[sci_a.getBBox()]
+        image_b = image_b[sci_b.getBBox()]
+    if strip_metadata:
+        _strip_ds9_metadata(image_a, image_b)
+
+    common = dict(
+        reliability_threshold=reliability_threshold,
+        show_unfiltered=show_unfiltered,
+        show_trailed=show_trailed, show_rejected=show_rejected,
+        show_marginal=show_marginal, show_solar_system=show_solar_system,
+        show_apdb=show_apdb, show_reliability_labels=show_reliability_labels,
+        color_by=color_by,
+    )
+    overlays_a, rel_a, ss_a = _collect_overlays(butler_a, data_id, image_a.wcs, **common)
+    overlays_b, rel_b, ss_b = _collect_overlays(butler_b, data_id, image_b.wcs, **common)
+
+    label_a, label_b = labels
+    print(f"visit={visit}, detector={detector}: A/B comparison of {image_type!r}")
+    _print_overlay_legend(overlays_a, f"-- {label_a} overlay legend:", indent="  ")
+    _print_overlay_legend(overlays_b, f"-- {label_b} overlay legend:", indent="  ")
+
+    afw_display = lsst.afw.display.Display(backend=backend)
+    if mask_transparency is not None:
+        afw_display.setMaskTransparency(mask_transparency)
+    for frame, (tag, image, overlays, rel, ss) in enumerate((
+            (label_a, image_a, overlays_a, rel_a, ss_a),
+            (label_b, image_b, overlays_b, rel_b, ss_b))):
+        afw_display.frame = frame
+        afw_display.image(image, title=f"{image_type} ({tag})")
+        _draw_overlays_on_current_frame(afw_display, overlays, rel, ss,
+                                        label_size=label_size)
+
+    try:
+        afw_display.alignImages(match_type="Pixel")
+    except NotImplementedError:
+        print(f"WARNING: cannot automatically align and lock images with backend={backend!r}.")
+
+
+def extract_timestamped_messages(log: str | dict[str, Any]) -> str:
+    """
+    Extract records[*].(asctime, message) from an LSST-style JSON log and
+    format as:
+        2026-02-25T04:15:35.092108Z Preparing execution...
+    one per line.
+
+    Parameters
+    ----------
+    log:
+        Either the JSON text (str) or a parsed dict.
+    sort:
+        If True, sort by asctime (robust if log fragments are concatenated).
+
+    Returns
+    -------
+    str
+        Joined lines.
+    """
+    if isinstance(log, str):
+        s = log.strip()
+
+        # Handle the case where the *JSON itself* is wrapped in quotes, like:
+        # '"{...}"' or "'{...}'"
+        if (len(s) >= 2) and (s[0] == s[-1]) and s[0] in ("'", '"'):
+            s = s[1:-1]
+
+        try:
+            obj = json.loads(s)
+        except json.JSONDecodeError:
+            # One more attempt: sometimes a quoted-JSON string is itself
+            # JSON-encoded e.g. "\"{...}\""
+            obj = json.loads(json.loads(s))
+    else:
+        obj = log
+
+    records = obj.get("records", [])
+    if not isinstance(records, list):
+        raise TypeError("Expected obj['records'] to be a list.")
+
+    rows: list[tuple[datetime, str, str]] = []
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        ts = rec.get("asctime")
+        msg = rec.get("message")
+        if not ts or msg is None:
+            continue
+
+        # Parse ISO-8601 with trailing "Z"
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(timezone.utc)
+        rows.append((dt, ts, str(msg)))
+
+    return "\n".join(f"{ts} {msg}" for _, ts, msg in rows)
