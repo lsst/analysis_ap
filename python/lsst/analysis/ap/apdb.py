@@ -26,10 +26,87 @@ __all__ = ["DbQuery", "ApdbSqliteQuery", "ApdbPostgresQuery"]
 
 import abc
 import contextlib
+import os
 import warnings
+from importlib.resources import files
 
+import felis.datamodel
 import pandas as pd
 import sqlalchemy
+
+from lsst.pipe.tasks.schemaUtils import column_dtype, readSdmSchemaFile
+
+
+# Integer felis types whose default pandas read path silently coerces NULL
+# rows through float64. Drive the dtype from the SDM schema for these types
+# only and leave float / bool / string / timestamp columns to pandas' default
+# inference so we don't perturb unrelated behavior.
+_INT_FELIS_TYPES = frozenset({
+    felis.datamodel.DataType.long,
+    felis.datamodel.DataType.int,
+    felis.datamodel.DataType.short,
+    felis.datamodel.DataType.byte,
+})
+
+
+_apdb_schema_cache = None
+
+
+def _apdb_schema():
+    """Lazily load the APDB SDM schema (``sdm_schemas/apdb.yaml``) once."""
+    global _apdb_schema_cache
+    if _apdb_schema_cache is None:
+        path = os.fspath(files("lsst.sdm.schemas").joinpath("apdb.yaml"))
+        _apdb_schema_cache = readSdmSchemaFile(path)
+    return _apdb_schema_cache
+
+
+def _schema_int_dtypes(table_name):
+    """Return a {column_name: pandas-dtype} mapping for integer columns of
+    one APDB table.
+
+    Returns an empty dict if the table is not in the SDM schema (e.g. an
+    older fixture with tables that have since been removed).
+    """
+    table_def = _apdb_schema().get(table_name)
+    if table_def is None:
+        return {}
+    return {
+        cdef.name: column_dtype(cdef.datatype, nullable=cdef.nullable)
+        for cdef in table_def.columns
+        if cdef.datatype in _INT_FELIS_TYPES
+    }
+
+
+def _read_query(connection, query, table_name=None):
+    """Run ``query`` on ``connection`` and return a DataFrame with correct
+    integer-column dtypes.
+
+    ``pd.read_sql_query`` represents SQL NULLs as ``NaN`` and so forces any
+    nullable BIGINT column through ``float64``.
+    Here we fetch rows directly from the cursor and build each integer
+    column with the dtype declared by the SDM schema (looked up via
+    ``schemaUtils.column_dtype``); other columns fall through to pandas'
+    default inference.
+    """
+    cursor = connection.execute(query)
+    columns = list(cursor.keys())
+    rows = cursor.fetchall()
+    dtype_map = _schema_int_dtypes(table_name) if table_name else {}
+    data = {}
+    for i, col in enumerate(columns):
+        values = [row[i] for row in rows]
+        dtype = dtype_map.get(col)
+        if dtype is not None:
+            try:
+                data[col] = pd.array(values, dtype=dtype)
+                continue
+            except (TypeError, ValueError):
+                # Cast impossible (driver returned an unexpected type);
+                # fall through to pandas inference.
+                pass
+        data[col] = values
+    return pd.DataFrame(data)
 
 
 class DbQuery(abc.ABC):
@@ -315,7 +392,7 @@ class DbSqlQuery(DbQuery):
         if limit is not None:
             query = query.limit(limit)
         with self.connection as connection:
-            result = pd.read_sql_query(query, connection)
+            result = _read_query(connection, query, table_name=table.name)
         if fill_instrument:
             self._fill_from_instrument(result)
         return result
@@ -386,13 +463,27 @@ class DbSqlQuery(DbQuery):
             limit=limit,
         )
 
+    @staticmethod
+    def _validity_end_column(table):
+        """Return the DiaObject "validity end" column.
+
+        sdm_schemas renamed this to ``validityEndMjdTai`` (it's also nullable
+        double-precision MJD now, not a TIMESTAMP). Older fixtures still have
+        the original ``validityEnd`` name; this helper prefers the current
+        name and falls back to the legacy one.
+        """
+        for name in ("validityEndMjdTai", "validityEnd"):
+            if name in table.columns:
+                return table.columns[name]
+        raise KeyError("DiaObject has neither validityEndMjdTai nor validityEnd")
+
     def load_object(self, id):
         # Docstring is inherited.
         table = self._tables["DiaObject"]
         result = self._load_table(
             table,
             where=sqlalchemy.and_(
-                table.columns["validityEnd"] == None,  # noqa: E711
+                self._validity_end_column(table) == None,  # noqa: E711
                 table.columns["diaObjectId"] == id,
             ),
             fill_instrument=False,
@@ -404,7 +495,7 @@ class DbSqlQuery(DbQuery):
     def load_objects(self, limit=100000, latest=True):
         # Docstring is inherited.
         table = self._tables["DiaObject"]
-        where = table.columns["validityEnd"] == None if latest else None  # noqa: E711
+        where = self._validity_end_column(table) == None if latest else None  # noqa: E711
         return self._load_table(
             table,
             where=where,
@@ -458,7 +549,7 @@ class DbSqlQuery(DbQuery):
                                    table.columns["diaSourceId"])
             query = query.limit(page_size).offset(offset)
             with self.connection as connection:
-                page = pd.read_sql_query(query, connection)
+                page = _read_query(connection, query, table_name=table.name)
             if len(page) == 0:
                 break
             self._fill_from_instrument(page)

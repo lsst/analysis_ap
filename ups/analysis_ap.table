@@ -13,6 +13,8 @@ setupRequired(pipe_base)
 setupRequired(utils)
 setupRequired(analysis_tools)
 setupRequired(ap_association)
+setupRequired(pipe_tasks)
+setupRequired(sdm_schemas)
 
 # TODO: DM-39501: to mock a dimension packer, until detector/visit are in APDB.
 setupOptional(obs_lsst)
