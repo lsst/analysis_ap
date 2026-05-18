@@ -535,7 +535,43 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         return output
 
 
-def _annotate_image(fig, source, len_sizes):
+# Flag groupings for the metadata legend on cutout images. A row's label is
+# colored red if any column in its group is set on the source.
+_FLAG_GROUPS = {
+    "psf": ["psfFlux_flag", "psfFlux_flag_noGoodPixels", "psfFlux_flag_edge"],
+    "aperture": ["apFlux_flag", "apFlux_flag_apertureTruncated"],
+    "forced": ["forced_PsfFlux_flag", "forced_PsfFlux_flag_noGoodPixels",
+               "forced_PsfFlux_flag_edge"],
+    "edge": ["pixelFlags_edge"],
+    "interp": ["pixelFlags_interpolated", "pixelFlags_interpolatedCenter"],
+    "saturated": ["pixelFlags_saturated", "pixelFlags_saturatedCenter"],
+    "cr": ["pixelFlags_cr", "pixelFlags_crCenter"],
+    "bad": ["pixelFlags_bad"],
+    "suspect": ["pixelFlags_suspect", "pixelFlags_suspectCenter"],
+    "centroid": ["centroid_flag"],
+    "shape": ["shape_flag", "shape_flag_no_pixels", "shape_flag_not_contained",
+              "shape_flag_parent_source"],
+}
+
+# Flag-tag overlays drawn on top of the flux rows (rows 2 and 3). Each entry
+# is (predicate, x, label, color, row_index). The predicate is either a key
+# into ``_FLAG_GROUPS`` (the tag is drawn if any column in the group is set)
+# or a callable returning a bool.
+_FLAG_TAGS = [
+    ("edge", 0.55, "EDGE", "goldenrod", 2),
+    ("interp", 0.62, "INTERP", "green", 2),
+    ("saturated", 0.72, "SAT", "green", 2),
+    ("cr", 0.77, "CR", "magenta", 2),
+    ("bad", 0.81, "BAD", "red", 2),
+    (lambda src: bool(src["isDipole"]), 0.87, "DIPOLE", "indigo", 2),
+    ("suspect", 0.55, "SUS", "goldenrod", 3),
+    ("centroid", 0.60, "CENTROID", "red", 3),
+    ("shape", 0.73, "SHAPE", "red", 3),
+]
+# Future option: add two more flag flavors at x = 0.80 and 0.87 on row 3.
+
+
+def _annotate_image(fig, source, len_sizes, heights=None):
     """Annotate the cutouts image with metadata and flags.
 
     Parameters
@@ -546,100 +582,98 @@ def _annotate_image(fig, source, len_sizes):
         DiaSource record of the object being plotted.
     len_sizes : `int`
         Length of the ``size`` array set in configuration.
+    heights : `list` [`float`], optional
+        Five figure-fraction y-coordinates for the metadata rows. If None,
+        the default heights are chosen based on ``len_sizes``. Subclasses
+        that add extra panels to the figure can pass their own positions.
     """
-    # Names of flags fields to add a flag label to the image, using any().
-    flags_psf = ["psfFlux_flag", "psfFlux_flag_noGoodPixels", "psfFlux_flag_edge"]
-    flags_aperture = ["apFlux_flag", "apFlux_flag_apertureTruncated"]
-    flags_forced = ["forced_PsfFlux_flag", "forced_PsfFlux_flag_noGoodPixels",
-                    "forced_PsfFlux_flag_edge"]
-    flags_edge = ["pixelFlags_edge"]
-    flags_interp = ["pixelFlags_interpolated", "pixelFlags_interpolatedCenter"]
-    flags_saturated = ["pixelFlags_saturated", "pixelFlags_saturatedCenter"]
-    flags_cr = ["pixelFlags_cr", "pixelFlags_crCenter"]
-    flags_bad = ["pixelFlags_bad"]
-    flags_suspect = ["pixelFlags_suspect", "pixelFlags_suspectCenter"]
-    flags_centroid = ["centroid_flag"]
-    flags_shape = ["shape_flag", "shape_flag_no_pixels", "shape_flag_not_contained",
-                   "shape_flag_parent_source"]
-
     flag_color = "red"
     text_color = "grey"
 
-    if len_sizes == 1:
-        heights = [0.95, 0.91, 0.87, 0.83, 0.79]
-    else:
-        heights = [1.2, 1.15, 1.1, 1.05, 1.0]
+    if heights is None:
+        if len_sizes == 1:
+            heights = [0.95, 0.91, 0.87, 0.83, 0.79]
+        else:
+            heights = [1.2, 1.15, 1.1, 1.05, 1.0]
 
-    # NOTE: fig.text coordinates are in fractions of the figure.
-    fig.text(0, heights[0], "diaSourceId:", color=text_color)
-    fig.text(0.145, heights[0], f"{source['diaSourceId']}")
-    fig.text(0.43, heights[0], f"{source['instrument']}", fontweight="bold")
-    fig.text(0.64, heights[0], "detector:", color=text_color)
-    fig.text(0.74, heights[0], f"{source['detector']}")
-    fig.text(0.795, heights[0], "visit:", color=text_color)
-    fig.text(0.85, heights[0], f"{source['visit']}")
-    fig.text(0.95, heights[0], f"{source['band']}")
+    def label_color(group_key):
+        """Red label if any flag in the group is set, otherwise grey."""
+        return flag_color if any(source[_FLAG_GROUPS[group_key]]) else text_color
 
-    fig.text(0.0, heights[1], "ra:", color=text_color)
-    fig.text(0.037, heights[1], f"{source['ra']:.8f}")
-    fig.text(0.21, heights[1], "dec:", color=text_color)
-    fig.text(0.265, heights[1], f"{source['dec']:+.8f}")
-    fig.text(0.50, heights[1], "detection S/N:", color=text_color)
-    fig.text(0.66, heights[1], f"{source['snr']:6.1f}")
-    fig.text(0.75, heights[1], "PSF chi2:", color=text_color)
-    fig.text(0.85, heights[1], f"{source['psfChi2']/source['psfNdata']:6.2f}")
+    # Each row is a list of (x, text, kwargs) atoms drawn at heights[row_idx].
+    # fig.text coordinates are in fractions of the figure.
+    rows = [
+        # Row 0: identity (diaSourceId, instrument, detector, visit, band).
+        [
+            (0.000, "diaSourceId:", {"color": text_color}),
+            (0.145, f"{source['diaSourceId']}", {}),
+            (0.430, f"{source['instrument']}", {"fontweight": "bold"}),
+            (0.640, "detector:", {"color": text_color}),
+            (0.740, f"{source['detector']}", {}),
+            (0.795, "visit:", {"color": text_color}),
+            (0.850, f"{source['visit']}", {}),
+            (0.950, f"{source['band']}", {}),
+        ],
+        # Row 1: coordinates and detection-quality numbers.
+        [
+            (0.000, "ra:", {"color": text_color}),
+            (0.037, f"{source['ra']:.8f}", {}),
+            (0.210, "dec:", {"color": text_color}),
+            (0.265, f"{source['dec']:+.8f}", {}),
+            (0.500, "detection S/N:", {"color": text_color}),
+            (0.660, f"{source['snr']:6.1f}", {}),
+            (0.750, "PSF chi2:", {"color": text_color}),
+            (0.850, f"{source['psfChi2']/source['psfNdata']:6.2f}", {}),
+        ],
+        # Row 2: PSF flux.
+        [
+            (0.000, "PSF (nJy):", {"color": label_color("psf")}),
+            (0.250, f"{source['psfFlux']:8.1f}", {"horizontalalignment": "right"}),
+            (0.252, "+/-", {"color": text_color}),
+            (0.290, f"{source['psfFluxErr']:8.1f}", {}),
+            (0.400, "S/N:", {"color": text_color}),
+            (0.450, f"{abs(source['psfFlux']/source['psfFluxErr']):6.2f}", {}),
+        ],
+        # Row 3: aperture flux.
+        [
+            (0.000, "ap (nJy):", {"color": label_color("aperture")}),
+            (0.250, f"{source['apFlux']:8.1f}", {"horizontalalignment": "right"}),
+            (0.252, "+/-", {"color": text_color}),
+            (0.290, f"{source['apFluxErr']:8.1f}", {}),
+            (0.400, "S/N:", {"color": text_color}),
+            (0.450, f"{abs(source['apFlux']/source['apFluxErr']):#6.2f}", {}),
+        ],
+        # Row 4: forced-photometry flux + ABmag.
+        [
+            (0.000, "sci (nJy):", {"color": label_color("forced")}),
+            (0.250, f"{source['scienceFlux']:8.1f}", {"horizontalalignment": "right"}),
+            (0.252, "+/-", {"color": text_color}),
+            (0.290, f"{source['scienceFluxErr']:8.1f}", {}),
+            (0.400, "S/N:", {"color": text_color}),
+            (0.450, f"{abs(source['scienceFlux']/source['scienceFluxErr']):6.2f}", {}),
+            (0.550, "ABmag:", {"color": text_color}),
+            (0.635, f"{(source['scienceFlux']*u.nanojansky).to_value(u.ABmag):.3f}", {}),
+        ],
+    ]
+    for row, y in zip(rows, heights):
+        for x, text, kwargs in row:
+            fig.text(x, y, text, **kwargs)
 
-    fig.text(0.0, heights[2], "PSF (nJy):", color=flag_color if any(source[flags_psf]) else text_color)
-    fig.text(0.25, heights[2], f"{source['psfFlux']:8.1f}", horizontalalignment='right')
-    fig.text(0.252, heights[2], "+/-", color=text_color)
-    fig.text(0.29, heights[2], f"{source['psfFluxErr']:8.1f}")
-    fig.text(0.40, heights[2], "S/N:", color=text_color)
-    fig.text(0.45, heights[2], f"{abs(source['psfFlux']/source['psfFluxErr']):6.2f}")
+    # Draw flag-tag overlays after the rows so they sit on top.
+    for predicate, x, text, color, row_idx in _FLAG_TAGS:
+        if callable(predicate):
+            triggered = predicate(source)
+        else:
+            triggered = any(source[_FLAG_GROUPS[predicate]])
+        if triggered:
+            fig.text(x, heights[row_idx], text, color=color, fontweight="bold")
 
-    # NOTE: yellow is hard to read on white; use goldenrod instead.
-    if any(source[flags_edge]):
-        fig.text(0.55, heights[2], "EDGE", color="goldenrod", fontweight="bold")
-    if any(source[flags_interp]):
-        fig.text(0.62, heights[2], "INTERP", color="green", fontweight="bold")
-    if any(source[flags_saturated]):
-        fig.text(0.72, heights[2], "SAT", color="green", fontweight="bold")
-    if any(source[flags_cr]):
-        fig.text(0.77, heights[2], "CR", color="magenta", fontweight="bold")
-    if any(source[flags_bad]):
-        fig.text(0.81, heights[2], "BAD", color="red", fontweight="bold")
-    if source['isDipole']:
-        fig.text(0.87, heights[2], "DIPOLE", color="indigo", fontweight="bold")
-
-    fig.text(0.0, heights[3], "ap (nJy):", color=flag_color if any(source[flags_aperture]) else text_color)
-    fig.text(0.25, heights[3], f"{source['apFlux']:8.1f}", horizontalalignment='right')
-    fig.text(0.252, heights[3], "+/-", color=text_color)
-    fig.text(0.29, heights[3], f"{source['apFluxErr']:8.1f}")
-    fig.text(0.40, heights[3], "S/N:", color=text_color)
-    fig.text(0.45, heights[3], f"{abs(source['apFlux']/source['apFluxErr']):#6.2f}")
-
-    if any(source[flags_suspect]):
-        fig.text(0.55, heights[3], "SUS", color="goldenrod", fontweight="bold")
-    if any(source[flags_centroid]):
-        fig.text(0.60, heights[3], "CENTROID", color="red", fontweight="bold")
-    if any(source[flags_shape]):
-        fig.text(0.73, heights[3], "SHAPE", color="red", fontweight="bold")
-    # Future option: to add two more flag flavors to the legend,
-    # use locations 0.80 and 0.87
-
-    # rb score
+    # Reliability score: color depends on the value, not on flags.
     if source['reliability'] is not None and np.isfinite(source['reliability']):
-        fig.text(0.73, heights[4], f"RB:{source['reliability']:.03f}",
-                 color='#e41a1c' if source['reliability'] < 0.5 else '#4daf4a',
+        rb = source['reliability']
+        fig.text(0.73, heights[4], f"RB:{rb:.03f}",
+                 color='#e41a1c' if rb < 0.5 else '#4daf4a',
                  fontweight="bold")
-
-    fig.text(0.0, heights[4], "sci (nJy):", color=flag_color if any(source[flags_forced]) else text_color)
-    fig.text(0.25, heights[4], f"{source['scienceFlux']:8.1f}", horizontalalignment='right')
-    fig.text(0.252, heights[4], "+/-", color=text_color)
-    fig.text(0.29, heights[4], f"{source['scienceFluxErr']:8.1f}")
-    fig.text(0.40, heights[4], "S/N:", color=text_color)
-    fig.text(0.45, heights[4], f"{abs(source['scienceFlux']/source['scienceFluxErr']):6.2f}")
-    fig.text(0.55, heights[4], "ABmag:", color=text_color)
-    fig.text(0.635, heights[4], f"{(source['scienceFlux']*u.nanojansky).to_value(u.ABmag):.3f}")
 
 
 class CutoutPath:
