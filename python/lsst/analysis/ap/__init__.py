@@ -29,4 +29,5 @@ from .plotDiaSourceLightcurve import *
 from .apdbReconstruct import *
 from .compare import *
 from .imageQA import *
+from .spatiallySampledMetricsQA import *
 from .plotUtils import *
