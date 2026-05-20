@@ -21,7 +21,8 @@
 
 from __future__ import annotations
 
-__all__ = ["make_simbad_link", "compare_sources", "display_images", "display_images_ab",
+__all__ = ["make_simbad_link", "compare_sources", "compare_objects",
+           "display_images", "display_images_ab",
            "get_xy_from_source_table", "extract_timestamped_messages"]
 
 import astropy.coordinates as coord
@@ -265,6 +266,52 @@ def compare_sources(butler1, butler2, query1, query2,
         # drop pathexists columns to return to original dataframe shape
         _ = unique1.pop('pathexists')
         _ = unique2.pop('pathexists')
+
+    return unique1, unique2, matched
+
+
+def compare_objects(query1, query2, match_radius=0.5):
+    """Compare two APDB datasets by spatially crossmatching diaObjects.
+
+    Parameters
+    ----------
+    query1 : `lsst.analysis.ap.DbQuery`
+        DbQuery to first APDB (postgresql or slite file;
+        NOT created in this function).
+    query2 : `lsst.analysis.ap.DbQuery`
+        DbQuery to second APDB (postgresql or slite file;
+        NOT created in this function).
+    match_radius : `double`
+        Maximum allowable distance in arcsec between an object in
+        data1 and data2.
+
+    Returns
+    -------
+    unique1 : `pandas.DataFrame`
+        Data frame of diaObjects only found in the first dataset.
+    unique2 : `pandas.DataFrame`
+        Data frame of diaObjects only found in the second dataset.
+    matched : `pandas.DataFrame`
+        Data frame of matched diaObjects; the rows are objects from the
+        first dataset, with two columns added: ``obj2_diaObjectId``
+        pointing to the matched diaObjectId in the second dataset, and
+        ``xmatch_dist_arcsec`` giving the on-sky separation in arcseconds.
+    """
+    obj1 = query1.load_objects()
+    obj2 = query2.load_objects()
+
+    # diaObjects aren't tied to a single (visit, detector); match across
+    # the full catalog with `on=()`.
+    matched, unique1, unique2 = match_catalogs(
+        obj1, obj2,
+        radius=match_radius * u.arcsec,
+        on=(),
+        id_col="diaObjectId",
+    )
+    matched = matched.rename(columns={"diaObjectId_2": "obj2_diaObjectId"})
+
+    print("{} matched objects; {} unique to set 1; {} unique to set 2.".format(
+        len(matched), len(unique1), len(unique2)))
 
     return unique1, unique2, matched
 
