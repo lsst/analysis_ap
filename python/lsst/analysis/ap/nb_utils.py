@@ -22,6 +22,8 @@
 from __future__ import annotations
 
 __all__ = ["make_simbad_link", "compare_sources", "compare_objects",
+           "find_objects_sharing_sources",
+           "classify_association_clusters",
            "display_images", "display_images_ab",
            "get_xy_from_source_table", "extract_timestamped_messages"]
 
@@ -314,6 +316,244 @@ def compare_objects(query1, query2, match_radius=0.5):
         len(matched), len(unique1), len(unique2)))
 
     return unique1, unique2, matched
+
+
+def find_objects_sharing_sources(diaObjectId, sources1, sources2,
+                                 objects1, objects2,
+                                 max_distance_arcsec=2):
+    """For a diaObjectId in run 1, return the full association cluster
+    of diaSources and diaObjects from both runs.
+
+    Treats the (diaSource, run-1-diaObject, run-2-diaObject) links as a
+    graph -- each diaSource is connected to its owning diaObject in
+    each run -- and grows the connected component reachable from the
+    input diaObjectId until no new sources or objects are discovered.
+    Catches arbitrarily deep merge/split chains across the two runs
+    (e.g. run 2 merges A+B into Z, then a third source in B is split
+    into a fourth object in run 2, etc.).
+
+    Assumes diaSourceIds are stable across the two runs.
+
+    Parameters
+    ----------
+    diaObjectId : `int`
+        A diaObjectId, typically from `unique1` returned by
+        `compare_objects`.
+    sources1, sources2 : `pandas.DataFrame`
+        Full diaSources catalogs from runs 1 and 2 (e.g. from
+        ``query.load_sources()``). Each must contain `diaSourceId`,
+        `diaObjectId`, `ra`, and `dec` columns.
+    objects1, objects2 : `pandas.DataFrame`
+        Full diaObjects catalogs from runs 1 and 2 (e.g. from
+        ``query.load_objects()``). Each must contain `diaObjectId`,
+        `ra`, and `dec` columns.
+    max_distance_arcsec : `float`, optional
+        If given, only include diaSources within this distance of the input
+        diaObject's (ra, dec) in the search. All diaSources of the final
+        diaObjects will still be returned, even if outside this distance.
+
+    Returns
+    -------
+    sources : `pandas.DataFrame`
+        Rows of `sources1` for every diaSource belonging to any of the
+        found run-2 diaObjects (in run 2's view).
+    related_objects1 : `pandas.DataFrame`
+        Rows of `objects1` for every run-1 diaObject containing any of
+        those diaSources in run 1.
+    related_objects2 : `pandas.DataFrame`
+        Rows of `objects2` for every run-2 diaObject containing any of
+        those diaSources in run 2.
+    """
+    if max_distance_arcsec is not None:
+        ref_match = objects1[objects1["diaObjectId"] == diaObjectId]
+        if len(ref_match) == 0:
+            raise ValueError(
+                f"diaObjectId={diaObjectId} not found in objects1")
+        ref_row = ref_match.iloc[0]
+        ref = coord.SkyCoord(ra=ref_row["ra"] * u.deg,
+                             dec=ref_row["dec"] * u.deg)
+        # diaSourceIds (and their sky positions) match across runs, so
+        # filtering once against sources1 suffices.
+        sep = ref.separation(
+            coord.SkyCoord(ra=sources1["ra"].values * u.deg,
+                           dec=sources1["dec"].values * u.deg)
+        ).to_value(u.arcsec)
+        allowed_src_ids = set(
+            sources1.loc[sep <= max_distance_arcsec, "diaSourceId"])
+    else:
+        allowed_src_ids = None
+
+    # Breadth-first search for the connected component:
+    # alternately expand sources from the currently-known objects,
+    # then expand objects from the sources.
+    # Terminates because every iteration adds at least one source
+    # before the fixed-point check fires, and the source pool is finite.
+    src_ids = set()
+    obj1_ids = {diaObjectId}
+    obj2_ids = set()
+
+    while True:
+        new_src_ids = set(
+            sources1.loc[sources1["diaObjectId"].isin(obj1_ids),
+                         "diaSourceId"])
+        new_src_ids.update(
+            sources2.loc[sources2["diaObjectId"].isin(obj2_ids),
+                         "diaSourceId"])
+        if allowed_src_ids is not None:
+            new_src_ids &= allowed_src_ids
+        if new_src_ids <= src_ids:
+            break
+        src_ids |= new_src_ids
+        obj1_ids |= set(
+            sources1.loc[sources1["diaSourceId"].isin(src_ids),
+                         "diaObjectId"])
+        obj2_ids |= set(
+            sources2.loc[sources2["diaSourceId"].isin(src_ids),
+                         "diaObjectId"])
+
+    # Expand the final diaSource list to every source owned by any
+    # surviving diaObject.
+    final_src_ids = set(
+        sources1.loc[sources1["diaObjectId"].isin(obj1_ids), "diaSourceId"])
+    final_src_ids |= set(
+        sources2.loc[sources2["diaObjectId"].isin(obj2_ids), "diaSourceId"])
+
+    sources = sources1[sources1["diaSourceId"].isin(final_src_ids)]
+    related_objects1 = objects1[objects1["diaObjectId"].isin(obj1_ids)]
+    related_objects2 = objects2[objects2["diaObjectId"].isin(obj2_ids)]
+
+    return sources, related_objects1, related_objects2
+
+
+class _UnionFind:
+    """Disjoint-set with path compression and union-by-rank.
+
+    Used by `classify_association_clusters` to quickly find connected
+    components of the (run-1 diaObject, run-2 diaObject) graph.
+    """
+
+    def __init__(self):
+        self._parent = {}
+        self._rank = {}
+
+    def add(self, x):
+        if x not in self._parent:
+            self._parent[x] = x
+            self._rank[x] = 0
+
+    def find(self, x):
+        # Two-pass iterative find with path compression.
+        root = x
+        while self._parent[root] != root:
+            root = self._parent[root]
+        while self._parent[x] != root:
+            self._parent[x], x = root, self._parent[x]
+        return root
+
+    def union(self, x, y):
+        rx, ry = self.find(x), self.find(y)
+        if rx == ry:
+            return
+        if self._rank[rx] < self._rank[ry]:
+            rx, ry = ry, rx
+        self._parent[ry] = rx
+        if self._rank[rx] == self._rank[ry]:
+            self._rank[rx] += 1
+
+
+def classify_association_clusters(sources1, sources2):
+    """Enumerate and classify every association-disagreement cluster
+    between two APDBs that share input diaSources.
+
+    Builds the bipartite graph whose edges are
+    ``(diaSource -> its run-1 diaObject, diaSource -> its run-2
+    diaObject)`` over all common diaSources, runs union-find over the
+    diaObjectIds to extract every connected component, and labels each
+    cluster:
+
+      * ``matched``  -- one run-1 obj <-> one run-2 obj.
+      * ``split``    -- one run-1 obj split into multiple run-2 objs.
+      * ``merged``   -- multiple run-1 objs merged into one run-2 obj.
+      * ``tangled``  -- M run-1 objs <-> N run-2 objs, both > 1.
+
+    Assumes diaSourceIds are stable across the two runs; diaSources
+    present in only one catalog are silently skipped via inner join.
+
+    Parameters
+    ----------
+    sources1, sources2 : `pandas.DataFrame`
+        Full diaSources catalogs from runs 1 and 2 (e.g. from
+        ``query.load_sources()``). Each must contain `diaSourceId`,
+        `diaObjectId`, `ra`, and `dec` columns.
+
+    Returns
+    -------
+    clusters : `pandas.DataFrame`
+        One row per cluster, with columns:
+          - ``kind``: matched / split / merged / tangled.
+          - ``n_obj1``, ``n_obj2``: distinct diaObject counts per run.
+          - ``n_sources``: distinct diaSources in the cluster.
+          - ``obj1_ids``, ``obj2_ids``: tuples of diaObjectIds.
+          - ``ra``, ``dec``: mean sky position of the cluster's
+            diaSources (degrees).
+    """
+    # Pre-define the types so that value_counts() and groupby()
+    # include unused kinds with a count of 0.
+    kind_dtype = pd.CategoricalDtype(
+        categories=["matched", "split", "merged", "tangled"], ordered=True)
+
+    paired = sources1[["diaSourceId", "diaObjectId", "ra", "dec"]].merge(
+        sources2[["diaSourceId", "diaObjectId"]].rename(
+            columns={"diaObjectId": "diaObjectId_2"}),
+        on="diaSourceId", how="inner")
+
+    if len(paired) == 0:
+        empty = pd.DataFrame(columns=[
+            "kind", "n_obj1", "n_obj2", "n_sources",
+            "obj1_ids", "obj2_ids", "ra", "dec"])
+        empty["kind"] = empty["kind"].astype(kind_dtype)
+        return empty
+
+    # Define a namespace for the two runs so identical numeric ids in run 1 and
+    # run 2 don't collide as keys.
+    keys1 = [("r1", int(i)) for i in paired["diaObjectId"].to_numpy()]
+    keys2 = [("r2", int(i)) for i in paired["diaObjectId_2"].to_numpy()]
+
+    uf = _UnionFind()
+    for k in set(keys1):
+        uf.add(k)
+    for k in set(keys2):
+        uf.add(k)
+    for k1, k2 in zip(keys1, keys2):
+        uf.union(k1, k2)
+
+    paired = paired.assign(_cluster=[uf.find(k) for k in keys1])
+
+    rows = []
+    for _, grp in paired.groupby("_cluster", sort=False):
+        ids_a = tuple(sorted(int(i) for i in grp["diaObjectId"].unique()))
+        ids_b = tuple(sorted(int(i) for i in grp["diaObjectId_2"].unique()))
+        n1, n2 = len(ids_a), len(ids_b)
+        if n1 == 1 and n2 == 1:
+            kind = "matched"
+        elif n1 == 1:
+            kind = "split"
+        elif n2 == 1:
+            kind = "merged"
+        else:
+            kind = "tangled"
+        rows.append({
+            "kind": kind,
+            "n_obj1": n1, "n_obj2": n2,
+            "n_sources": grp["diaSourceId"].nunique(),
+            "obj1_ids": ids_a, "obj2_ids": ids_b,
+            "ra": float(grp["ra"].mean()),
+            "dec": float(grp["dec"].mean()),
+        })
+
+    result = pd.DataFrame(rows)
+    result["kind"] = result["kind"].astype(kind_dtype)
+    return result
 
 
 def get_xy_from_source_table(table, wcs, degrees=None):
