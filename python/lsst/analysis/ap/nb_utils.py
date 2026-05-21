@@ -24,6 +24,8 @@ from __future__ import annotations
 __all__ = ["make_simbad_link", "compare_sources", "compare_objects",
            "find_objects_sharing_sources",
            "classify_association_clusters",
+           "plot_cutouts_with_object_markers",
+           "plot_objects_sharing_sources",
            "display_images", "display_images_ab",
            "get_xy_from_source_table", "extract_timestamped_messages"]
 
@@ -554,6 +556,421 @@ def classify_association_clusters(sources1, sources2):
     result = pd.DataFrame(rows)
     result["kind"] = result["kind"].astype(kind_dtype)
     return result
+
+
+# Colors used by the cutout plotters to give each distinct
+# diaObjectId its own marker color.
+_OBJECT_PALETTE = ("lime", "red", "cyan", "magenta", "yellow", "orange",
+                   "deepskyblue", "pink", "white", "violet", "gold",
+                   "lightgreen")
+
+
+def _prepare_object_overlays(objects, palette):
+    """Deduplicate `objects` by diaObjectId and assign one palette color
+    per distinct id, returning the parallel arrays the cutout renderer
+    needs: ``(ids, ras, decs, colors)``. Done once per call so the same
+    color identifies the same diaObject across every cutout.
+    """
+    obj_unique = objects.drop_duplicates(subset="diaObjectId")
+    # Prefer the run-2 id when present (matched rows carry both); pandas
+    # concat promotes the column to float64 if any rows lack it, so cast
+    # back to int64 after filling.
+    if "obj2_diaObjectId" in obj_unique.columns:
+        obj_ids = obj_unique["obj2_diaObjectId"].combine_first(
+            obj_unique["diaObjectId"]).astype(np.int64).to_numpy()
+    else:
+        obj_ids = obj_unique["diaObjectId"].astype(np.int64).to_numpy()
+    obj_ras = np.asarray(obj_unique["ra"])
+    obj_decs = np.asarray(obj_unique["dec"])
+    obj_colors = [palette[i % len(palette)] for i in range(len(obj_ids))]
+    return obj_ids, obj_ras, obj_decs, obj_colors
+
+
+def _load_cutout(butler, row, *, size, image_type, image_datasets):
+    """Fetch the requested image dataset for this row's (visit,
+    detector) and return a small dict with everything the renderer
+    needs: pixel data, dimensions, cutout origin, WCS, an
+    ImageNormalize tuned to the central source, and the `image_type`
+    label used in the cutout title.
+
+    Loading is separated from rendering so callers that need to draw
+    the same cutout into multiple Axes can pay the butler.get + getCutout
+    cost once.
+    """
+    import astropy.visualization as aviz
+    import lsst.geom
+
+    dataset = image_datasets[image_type]
+    data_id = {"visit": int(row.visit), "detector": int(row.detector)}
+    exposure = butler.get(dataset, data_id)
+
+    center = lsst.geom.SpherePoint(row.ra, row.dec, lsst.geom.degrees)
+    extent = lsst.geom.Extent2I(size, size)
+    cutout = exposure.getCutout(center, extent)
+    data = cutout.image.array
+    ny, nx = data.shape
+
+    if image_type == "difference":
+        # Normalize on a small central window so the source dominates
+        # the dynamic range.
+        cy, cx = ny // 2, nx // 2
+        half = min(7, cy, cx)
+        norm_data = data[cy - half:cy + half + 1, cx - half:cx + half + 1]
+    else:
+        norm_data = data
+    norm = aviz.ImageNormalize(
+        norm_data, interval=aviz.MinMaxInterval(),
+        stretch=aviz.AsinhStretch(a=0.1))
+
+    return {
+        "data": data, "ny": ny, "nx": nx,
+        "wcs": cutout.wcs,
+        "x0": cutout.getX0(), "y0": cutout.getY0(),
+        "norm": norm,
+        "image_type": image_type,
+    }
+
+
+def _render_cutout_axes(ax, row, cutout_data, sources,
+                        obj_ids, obj_ras, obj_decs, obj_colors, *,
+                        marker_size, marker_symbol,
+                        source_marker_size, current_source_marker_size,
+                        current_source_color,
+                        title=None, subtitle=""):
+    """Render one diaSource cutout onto an existing matplotlib Axes
+    using preloaded data from `_load_cutout`.
+
+    Internal helper shared by `plot_cutouts_with_object_markers` and
+    `plot_objects_sharing_sources`. The caller owns figure creation,
+    layout, saving, and displaying.
+
+    By default the axes title is built from `row` as
+    ``"diaSourceId=... (image_type, visit=..., det=...)"``. Pass
+    `title=` explicitly (including ``""``) to override or suppress
+    that line -- useful when a parent figure or subfigure already
+    carries the shared header. If `subtitle` is non-empty it is drawn
+    on a second title line.
+    """
+    from matplotlib import cm
+
+    data = cutout_data["data"]
+    ny = cutout_data["ny"]
+    nx = cutout_data["nx"]
+    x0 = cutout_data["x0"]
+    y0 = cutout_data["y0"]
+    wcs = cutout_data["wcs"]
+    norm = cutout_data["norm"]
+    image_type = cutout_data["image_type"]
+
+    ax.imshow(data, cmap=cm.bone, interpolation="none", norm=norm,
+              origin="lower", aspect="equal",
+              extent=(0, nx, 0, ny))
+
+    this_id = int(row.diaSourceId)
+
+    # Project every supplied diaSource into the cutout frame once,
+    # then split into "this cutout's diaSource" vs every other
+    # diaSource whose sky position falls inside this cutout
+    # (regardless of which image it was detected on).
+    if len(sources) > 0:
+        src_xs, src_ys = wcs.skyToPixelArray(
+            np.asarray(sources["ra"]),
+            np.asarray(sources["dec"]),
+            degrees=True)
+        src_xs = src_xs - x0
+        src_ys = src_ys - y0
+        src_in_frame = (
+            (src_xs >= 0) & (src_xs < nx)
+            & (src_ys >= 0) & (src_ys < ny))
+        id_arr = sources["diaSourceId"].to_numpy()
+        other_src_mask = src_in_frame & (id_arr != this_id)
+        current_src_mask = src_in_frame & (id_arr == this_id)
+    else:
+        src_xs = src_ys = None
+        other_src_mask = current_src_mask = None
+
+    if other_src_mask is not None and other_src_mask.any():
+        # Share the current-diaSource color so the source positions are
+        # easy to read against the cm.bone background; the marker
+        # symbol (+ vs x) still distinguishes them.
+        ax.scatter(src_xs[other_src_mask], src_ys[other_src_mask],
+                   s=source_marker_size, marker="+",
+                   c=current_source_color, linewidths=1.0,
+                   label="other diaSource")
+
+    if len(obj_ids) > 0:
+        xs, ys = wcs.skyToPixelArray(obj_ras, obj_decs, degrees=True)
+        xs = xs - x0
+        ys = ys - y0
+        in_bounds = (xs >= 0) & (xs < nx) & (ys >= 0) & (ys < ny)
+    else:
+        in_bounds = np.zeros(0, dtype=bool)
+
+    for i in np.flatnonzero(in_bounds):
+        ax.scatter(xs[i], ys[i],
+                   s=marker_size, marker=marker_symbol,
+                   facecolors="none", edgecolors=obj_colors[i],
+                   linewidths=1.5,
+                   label=f"diaObjectId={int(obj_ids[i])}")
+
+    # Current diaSource last so it stays on top of any overlapping
+    # diaObject marker at the cutout center.
+    if current_src_mask is not None and current_src_mask.any():
+        ax.scatter(src_xs[current_src_mask], src_ys[current_src_mask],
+                   s=current_source_marker_size, marker="x",
+                   c=current_source_color, linewidths=2.0,
+                   label=f"current diaSourceId={this_id}")
+
+    if title is None:
+        title = (f"diaSourceId={this_id} "
+                 f"({image_type}, visit={int(row.visit)}, "
+                 f"det={int(row.detector)})")
+    if subtitle:
+        title = f"{title}\n{subtitle}" if title else subtitle
+    if title:
+        ax.set_title(title, fontsize="small")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    if ax.get_legend_handles_labels()[0]:
+        ax.legend(loc="upper right", fontsize="x-small", framealpha=0.7)
+
+
+def plot_cutouts_with_object_markers(sources, butler, objects, *,
+                                     output_path=None,
+                                     display_cutouts=False,
+                                     size=51,
+                                     image_type="difference",
+                                     image_datasets=_IMAGE_DATASETS,
+                                     marker_size=80,
+                                     marker_symbol="o",
+                                     palette=_OBJECT_PALETTE,
+                                     source_marker_size=80,
+                                     current_source_marker_size=180,
+                                     current_source_color="yellow"):
+    """Plot per-diaSource cutouts with overlaid markers at given diaObject
+    sky positions.
+
+    For each diaSource in `sources`, fetch a square cutout from `butler`
+    centered on the source's (ra, dec). On each cutout draw:
+
+      * A small ``+`` marker at every other diaSource in `sources`
+        whose sky position lands inside the cutout, regardless of which
+        (visit, detector) it was detected on.
+      * A distinct ``x`` marker for the diaSource the cutout is
+        centered on (the "current" diaSource).
+      * One color-coded marker per distinct diaObjectId in `objects`,
+        cycling through `palette`; the same color identifies the same
+        diaObject across every cutout in the run.
+
+    Markers that fall outside the cutout bounds are skipped.
+
+    Typical use: visualize how a group of diaSources (all originally
+    associated with one diaObjectId in run 1) got redistributed across
+    diaObjects in run 2. `sources` and `objects` are usually built from
+    the output of `find_objects_sharing_sources`::
+
+        sources, ro1, ro2 = find_objects_sharing_sources(
+            diaObjectId, sources1, sources2, objects1, objects2)
+        objects = pd.concat([ro1, ro2])
+        plot_cutouts_with_object_markers(
+            sources, butler1, objects, display_cutouts=True,
+        )
+
+    Parameters
+    ----------
+    sources : `pandas.DataFrame`
+        DiaSources to cut out. Must contain `diaSourceId`, `ra`, `dec`,
+        `visit`, and `detector` columns.
+    butler : `lsst.daf.butler.Butler`
+        Butler containing the image datasets for these (visit, detector)
+        pairs.
+    objects : `pandas.DataFrame`
+        DiaObjects to mark. Must contain `diaObjectId`, `ra`, and `dec`
+        columns. Duplicate diaObjectIds are dropped (first row wins).
+        If an `obj2_diaObjectId` column is present (e.g. for rows from
+        a `matched` DataFrame returned by `compare_objects`), the run-2
+        id is shown in the legend in preference to the run-1
+        `diaObjectId`.
+    output_path : `str`, optional
+        Directory to write ``{diaSourceId}.png`` files to. Created if
+        missing. Pass None to skip writing.
+    display_cutouts : `bool`, optional
+        If True, display each cutout inline (notebook).
+    size : `int`, optional
+        Cutout side length in pixels.
+    image_type : {"science", "template", "difference"}, optional
+        Which image to render.
+    image_datasets : `dict` [`str`, `str`], optional
+        Mapping from image-type key to butler dataset name.
+    marker_size : `int`, optional
+        matplotlib scatter ``s`` parameter for diaObject markers.
+    marker_symbol : `str`, optional
+        matplotlib scatter ``marker`` parameter for diaObject markers.
+    palette : sequence of `str`, optional
+        Color cycle used to assign one color per diaObjectId.
+    source_marker_size : `int`, optional
+        Scatter ``s`` parameter for the small ``+`` markers drawn at
+        the positions of the *other* diaSources in `sources`.
+    current_source_marker_size : `int`, optional
+        Scatter ``s`` parameter for the distinct marker drawn at the
+        diaSource the cutout is centered on.
+    current_source_color : `str`, optional
+        Color of the current-diaSource marker.
+    """
+    import matplotlib.pyplot as plt
+
+    if image_type not in image_datasets:
+        raise ValueError(
+            f"image_type must be one of {sorted(image_datasets)}, "
+            f"got {image_type!r}")
+
+    if output_path is not None:
+        os.makedirs(output_path, exist_ok=True)
+
+    overlays = _prepare_object_overlays(objects, palette)
+
+    for row in sources.itertuples(index=False):
+        cutout_data = _load_cutout(butler, row, size=size,
+                                   image_type=image_type,
+                                   image_datasets=image_datasets)
+        fig, ax = plt.subplots()
+        _render_cutout_axes(
+            ax, row, cutout_data, sources, *overlays,
+            marker_size=marker_size, marker_symbol=marker_symbol,
+            source_marker_size=source_marker_size,
+            current_source_marker_size=current_source_marker_size,
+            current_source_color=current_source_color)
+
+        if output_path is not None:
+            fpath = os.path.join(output_path, f"{int(row.diaSourceId)}.png")
+            fig.savefig(fpath, bbox_inches="tight")
+        if display_cutouts:
+            display(fig)
+        plt.close(fig)
+
+
+def plot_objects_sharing_sources(diaObjectId, sources1, sources2,
+                                 objects1, objects2, butler, *,
+                                 max_distance_arcsec=None,
+                                 output_path=None,
+                                 display_figure=True,
+                                 column_labels=("run 1", "run 2"),
+                                 figsize_per_row=4.0,
+                                 size=51,
+                                 image_type="difference",
+                                 image_datasets=_IMAGE_DATASETS,
+                                 marker_size=80,
+                                 marker_symbol="o",
+                                 palette=_OBJECT_PALETTE,
+                                 source_marker_size=80,
+                                 current_source_marker_size=180,
+                                 current_source_color="yellow"):
+    """Two-column cutout figure comparing the run-1 and run-2 views of
+    an association cluster.
+
+    Calls `find_objects_sharing_sources` internally to identify the
+    cluster of diaSources and diaObjects reachable from the input
+    `diaObjectId`, then renders one row per diaSource in the cluster.
+    The same cutout image is loaded once per row and drawn into both
+    columns: the left panel is overlaid with run-1 diaObject markers
+    (from `objects1`) and the right panel with run-2 diaObject markers
+    (from `objects2`). Each column's diaObjects get their own palette
+    mapping, so the same color in the left and right columns does
+    *not* imply the same diaObject.
+
+    Parameters
+    ----------
+    diaObjectId : `int`
+        Starting diaObjectId for the cluster walk.
+    sources1, sources2, objects1, objects2 : `pandas.DataFrame`
+        Forwarded to `find_objects_sharing_sources`.
+    butler : `lsst.daf.butler.Butler`
+        Butler used to fetch the cutout images. The same image backs
+        both panels of a given row.
+    max_distance_arcsec : `float`, optional
+        Forwarded to `find_objects_sharing_sources`.
+    output_path : `str`, optional
+        Filename to write the combined figure to as a PNG. Parent
+        directories are created if missing.
+    display_figure : `bool`, optional
+        If True, display the figure inline (notebook).
+    column_labels : pair of `str`, optional
+        Labels appended to each cutout's title to identify the column.
+    figsize_per_row : `float`, optional
+        Height in inches allocated to each cutout row.
+    All other kwargs:
+        Forwarded to the cutout renderer; same meaning as in
+        `plot_cutouts_with_object_markers`.
+
+    Returns
+    -------
+    sources, related_objects1, related_objects2 : `pandas.DataFrame`
+        The catalogs returned by `find_objects_sharing_sources`.
+    """
+    import matplotlib.pyplot as plt
+
+    if image_type not in image_datasets:
+        raise ValueError(
+            f"image_type must be one of {sorted(image_datasets)}, "
+            f"got {image_type!r}")
+
+    sources, ro1, ro2 = find_objects_sharing_sources(
+        diaObjectId, sources1, sources2, objects1, objects2,
+        max_distance_arcsec=max_distance_arcsec)
+
+    if len(sources) == 0:
+        print(f"No diaSources in the cluster for "
+              f"diaObjectId={diaObjectId}")
+        return sources, ro1, ro2
+
+    left_overlays = _prepare_object_overlays(ro1, palette)
+    right_overlays = _prepare_object_overlays(ro2, palette)
+
+    n_rows = len(sources)
+    # One subfigure per row so each row can carry a single shared
+    # suptitle above both panels; the per-axes title is then just the
+    # column label.
+    fig = plt.figure(figsize=(8, figsize_per_row * n_rows),
+                     constrained_layout=True)
+    subfigs = np.atleast_1d(fig.subfigures(n_rows, 1, squeeze=False).ravel())
+
+    common_kw = dict(
+        marker_size=marker_size, marker_symbol=marker_symbol,
+        source_marker_size=source_marker_size,
+        current_source_marker_size=current_source_marker_size,
+        current_source_color=current_source_color)
+
+    for i, row in enumerate(sources.itertuples(index=False)):
+        sf = subfigs[i]
+        sf.suptitle(
+            f"diaSourceId={int(row.diaSourceId)} "
+            f"({image_type}, visit={int(row.visit)}, "
+            f"det={int(row.detector)})",
+            fontsize="small")
+        ax_left, ax_right = sf.subplots(1, 2)
+        # Load once; both panels in this row use the same image.
+        cutout_data = _load_cutout(butler, row, size=size,
+                                   image_type=image_type,
+                                   image_datasets=image_datasets)
+        _render_cutout_axes(ax_left, row, cutout_data, sources,
+                            *left_overlays,
+                            title="", subtitle=column_labels[0],
+                            **common_kw)
+        _render_cutout_axes(ax_right, row, cutout_data, sources,
+                            *right_overlays,
+                            title="", subtitle=column_labels[1],
+                            **common_kw)
+
+    if output_path is not None:
+        out_dir = os.path.dirname(output_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        fig.savefig(output_path, bbox_inches="tight")
+    if display_figure:
+        display(fig)
+    plt.close(fig)
+
+    return sources, ro1, ro2
 
 
 def get_xy_from_source_table(table, wcs, degrees=None):
