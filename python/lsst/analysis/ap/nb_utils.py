@@ -636,6 +636,7 @@ def _render_cutout_axes(ax, row, cutout_data, sources,
                         marker_size, marker_symbol,
                         source_marker_size, current_source_marker_size,
                         current_source_color,
+                        source_match_ids=None,
                         title=None, subtitle=""):
     """Render one diaSource cutout onto an existing matplotlib Axes
     using preloaded data from `_load_cutout`.
@@ -689,13 +690,28 @@ def _render_cutout_axes(ax, row, cutout_data, sources,
         src_xs = src_ys = None
         other_src_mask = current_src_mask = None
 
+    # Per-diaSource color resolution: map each diaSource to its
+    # owning diaObject (in this panel's view), then to that
+    # diaObject's palette color. Falls back to `current_source_color`
+    # for sources whose owner is not present in `obj_ids`.
+    if source_match_ids is None:
+        match_ids_list = sources["diaObjectId"].tolist()
+    else:
+        match_ids_list = list(source_match_ids)
+    src_to_match = dict(zip(sources["diaSourceId"].tolist(),
+                            match_ids_list))
+    id_to_color = dict(zip(obj_ids.tolist(), obj_colors))
+
+    def _color_for(diaSourceId):
+        return id_to_color.get(
+            src_to_match.get(int(diaSourceId)), current_source_color)
+
     if other_src_mask is not None and other_src_mask.any():
-        # Share the current-diaSource color so the source positions are
-        # easy to read against the cm.bone background; the marker
-        # symbol (+ vs x) still distinguishes them.
+        other_indices = np.flatnonzero(other_src_mask)
+        other_colors = [_color_for(int(id_arr[i])) for i in other_indices]
         ax.scatter(src_xs[other_src_mask], src_ys[other_src_mask],
                    s=source_marker_size, marker="+",
-                   c=current_source_color, linewidths=1.0,
+                   c=other_colors, linewidths=1.0,
                    label="other diaSource")
 
     if len(obj_ids) > 0:
@@ -718,7 +734,7 @@ def _render_cutout_axes(ax, row, cutout_data, sources,
     if current_src_mask is not None and current_src_mask.any():
         ax.scatter(src_xs[current_src_mask], src_ys[current_src_mask],
                    s=current_source_marker_size, marker="x",
-                   c=current_source_color, linewidths=2.0,
+                   c=_color_for(this_id), linewidths=2.0,
                    label=f"current diaSourceId={this_id}")
 
     if title is None:
@@ -926,6 +942,16 @@ def plot_objects_sharing_sources(diaObjectId, sources1, sources2,
     left_overlays = _prepare_object_overlays(ro1, palette)
     right_overlays = _prepare_object_overlays(ro2, palette)
 
+    # diaSourceId -> run-2 diaObjectId, so the right panel can color
+    # each diaSource by its run-2 owner. The left panel uses the
+    # default (sources["diaObjectId"], the run-1 owner) since
+    # `sources` is a slice of `sources1`.
+    src_to_obj2 = dict(zip(
+        sources2["diaSourceId"].to_numpy(),
+        sources2["diaObjectId"].to_numpy()))
+    right_match_ids = [src_to_obj2.get(int(sid))
+                       for sid in sources["diaSourceId"]]
+
     n_rows = len(sources)
     # One subfigure per row so each row can carry a single shared
     # suptitle above both panels; the per-axes title is then just the
@@ -959,6 +985,7 @@ def plot_objects_sharing_sources(diaObjectId, sources1, sources2,
         _render_cutout_axes(ax_right, row, cutout_data, sources,
                             *right_overlays,
                             title="", subtitle=column_labels[1],
+                            source_match_ids=right_match_ids,
                             **common_kw)
 
     if output_path is not None:
