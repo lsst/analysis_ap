@@ -50,7 +50,10 @@ tables is available only through the explicit, prototype-only
 ``load_sources_by_time_window`` / ``load_forced_sources_by_time_window``
 (temporal) methods, which warn when used.
 
-All loaders return `astropy.table.Table` objects.
+All loaders return `astropy.table.Table` objects. Their columns are returned
+in SDM-schema order, since the TAP service returns ``SELECT *`` columns
+alphabetically; passing an explicit ``columns`` list overrides this with the
+order you request.
 """
 
 __all__ = [
@@ -63,16 +66,19 @@ __all__ = [
 ]
 
 import dataclasses
+import functools
 import logging
 import numbers
 import os
 import time
+from importlib.resources import files
 
 import astropy.table
 import pyvo
 import requests
 
 import lsst.geom
+from lsst.pipe.tasks.schemaUtils import readSdmSchemaFile
 
 _log = logging.getLogger(__name__)
 
@@ -90,6 +96,40 @@ DEFAULT_ROW_LIMIT = 100000
 # Valid LSST band names; used to validate band filters before they are
 # interpolated into an ADQL string.
 _VALID_BANDS = frozenset("ugrizy")
+
+# The PPDB tables share the APDB SDM schema (``sdm_schemas/apdb.yaml``); its
+# column order is the canonical, scientifically-grouped order. Loaders use it
+# to reorder results, because the TAP service returns ``SELECT *`` columns
+# alphabetically (its ``tap_schema.columns`` has no ``column_index``). Both
+# helpers are memoized, so the schema file is parsed at most once.
+
+
+@functools.cache
+def _sdm_schema():
+    """Parse and return the APDB SDM schema (shared by the PPDB tables)."""
+    path = os.fspath(files("lsst.sdm.schemas").joinpath("apdb.yaml"))
+    return readSdmSchemaFile(path)
+
+
+@functools.cache
+def _sdm_column_order(table_name):
+    """Return the SDM-schema column order for a PPDB table, or ``()``.
+
+    Parameters
+    ----------
+    table_name : `str`
+        Unqualified table name, e.g. ``"DiaSource"``.
+
+    Returns
+    -------
+    columns : `tuple` [`str`]
+        Column names in schema order, or an empty tuple if the table is not
+        in the SDM schema.
+    """
+    table_def = _sdm_schema().get(table_name)
+    if table_def is None:
+        return ()
+    return tuple(column.name for column in table_def.columns)
 
 
 def region_from_exposure(exposure, padding=DEFAULT_PADDING_ARCSEC):
@@ -223,7 +263,7 @@ class PpdbTap:
     # ------------------------------------------------------------------
     # Query execution
     # ------------------------------------------------------------------
-    def run_query(self, adql, *, maxrec=None):
+    def run_query(self, adql, *, maxrec=None, order_table=None):
         """Run an ADQL query and return the result as an astropy Table.
 
         Parameters
@@ -232,6 +272,12 @@ class PpdbTap:
             The ADQL query to execute.
         maxrec : `int`, optional
             Server-side cap on the number of records returned.
+        order_table : `str`, optional
+            If given (e.g. ``"DiaSource"``), reorder the result columns into
+            that table's SDM-schema order. The loaders pass this so that
+            ``SELECT *`` results, which the TAP service returns alphabetically,
+            come back in the schema's logical column order. Columns not in the
+            schema are appended in their original order.
 
         Returns
         -------
@@ -242,9 +288,40 @@ class PpdbTap:
         start = time.perf_counter()
         results = self._service.run_async(adql, maxrec=maxrec)
         table = results.to_table()
+        if order_table is not None:
+            table = self._order_columns(table, order_table)
         elapsed = time.perf_counter() - start
         self.log.info("Query returned %d rows in %.3f s", len(table), elapsed)
         return table
+
+    @staticmethod
+    def _order_columns(table, table_name):
+        """Reorder a result table's columns into SDM-schema order.
+
+        Every result column is expected to be defined in the SDM schema for
+        ``table_name`` (the PPDB does not add columns outside it), so columns
+        are returned in schema order. Returns the table unchanged if the
+        schema is unknown or the order already matches.
+
+        Raises
+        ------
+        RuntimeError
+            If the result contains a column not present in the SDM schema,
+            which signals an unexpected schema mismatch.
+        """
+        schema_order = _sdm_column_order(table_name)
+        if not schema_order:
+            return table
+        schema_set = set(schema_order)
+        unknown = [c for c in table.colnames if c not in schema_set]
+        if unknown:
+            raise RuntimeError(
+                f"ppdb.{table_name} returned columns not in the SDM schema: "
+                f"{unknown}")
+        new_order = [c for c in schema_order if c in table.colnames]
+        if new_order == table.colnames:
+            return table
+        return table[new_order]
 
     # ------------------------------------------------------------------
     # ADQL construction helpers
@@ -346,7 +423,9 @@ class PpdbTap:
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         adql = (f"{self._select_clause(columns, limit)} FROM ppdb.DiaObject"
                 f"{where} ORDER BY diaObjectId")
-        table = self._finish(self.run_query(adql), limit, "DiaObject")
+        order_table = "DiaObject" if columns is None else None
+        table = self._finish(self.run_query(adql, order_table=order_table),
+                             limit, "DiaObject")
         if latest and len(table) and "diaObjectId" in table.colnames:
             n_unique = len(set(table["diaObjectId"].tolist()))
             if n_unique != len(table):
@@ -380,7 +459,8 @@ class PpdbTap:
         adql = (f"{self._select_clause(columns, None)} FROM ppdb.DiaObject "
                 f"WHERE validityEndMjdTai IS NULL AND "
                 f"diaObjectId = {int(diaObjectId)}")
-        table = self.run_query(adql)
+        order_table = "DiaObject" if columns is None else None
+        table = self.run_query(adql, order_table=order_table)
         if len(table) == 0:
             raise RuntimeError(
                 f"diaObjectId={diaObjectId} not found in ppdb.DiaObject")
@@ -417,7 +497,9 @@ class PpdbTap:
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         adql = (f"{self._select_clause(columns, limit)} FROM ppdb.{table_name}"
                 f"{where} ORDER BY midpointMjdTai")
-        return self._finish(self.run_query(adql), limit, table_name)
+        order_table = table_name if columns is None else None
+        return self._finish(self.run_query(adql, order_table=order_table),
+                            limit, table_name)
 
     def _load_source_like(self, table_name, diaObjectId, extra_clauses,
                           columns, limit, id_chunk_size):
@@ -457,6 +539,7 @@ class PpdbTap:
             # Empty result, but issue a query so columns/dtypes are populated.
             return self._run_source_query(table_name, ["1 = 0"], columns, None)
 
+        order_table = table_name if columns is None else None
         pages = []
         total = 0
         truncated = False
@@ -471,7 +554,7 @@ class PpdbTap:
             where = " WHERE " + " AND ".join(clauses)
             adql = (f"{self._select_clause(columns, remaining)} "
                     f"FROM ppdb.{table_name}{where} ORDER BY midpointMjdTai")
-            page = self.run_query(adql)
+            page = self.run_query(adql, order_table=order_table)
             total += len(page)
             pages.append(page)
 
@@ -837,7 +920,8 @@ class PpdbTap:
         """Load exactly one row from a table by id, raising if absent."""
         adql = (f"{self._select_clause(columns, None)} FROM ppdb.{table_name} "
                 f"WHERE {id_column} = {int(id_value)}")
-        table = self.run_query(adql)
+        order_table = table_name if columns is None else None
+        table = self.run_query(adql, order_table=order_table)
         if len(table) == 0:
             raise RuntimeError(
                 f"{id_column}={id_value} not found in ppdb.{table_name}")

@@ -380,6 +380,64 @@ class TestRegionAndCone(lsst.utils.tests.TestCase):
             PpdbTap(service=fake).load_sources_by_time_window()
 
 
+class TestColumnOrdering(lsst.utils.tests.TestCase):
+    def test_sources_columns_reordered_to_sdm(self):
+        # alphabetical input columns -> SDM-schema order out.
+        scrambled = astropy.table.Table({
+            "band": ["r"], "dec": [1.0], "diaObjectId": [42],
+            "diaSourceId": [100], "midpointMjdTai": [60000.0], "ra": [150.0]})
+        fake = _FakeTapService(scrambled)
+        result = PpdbTap(service=fake).load_sources(diaObjectId=42)
+        self.assertEqual(result.colnames,
+                         ["diaSourceId", "diaObjectId", "midpointMjdTai",
+                          "ra", "dec", "band"])
+
+    def test_unknown_columns_raise(self):
+        # a column not in the SDM schema signals schema drift -> error.
+        tab = astropy.table.Table({
+            "ra": [150.0], "diaSourceId": [100], "myExtra": [1]})
+        fake = _FakeTapService(tab)
+        with self.assertRaisesRegex(RuntimeError, "not in the SDM schema"):
+            PpdbTap(service=fake).load_sources(diaObjectId=42)
+
+    def test_explicit_columns_order_preserved(self):
+        # an explicit columns list is respected, not reordered to SDM order.
+        tab = astropy.table.Table({"dec": [1.0], "ra": [150.0]})
+        fake = _FakeTapService(tab)
+        result = PpdbTap(service=fake).load_sources(diaObjectId=42,
+                                                    columns=["dec", "ra"])
+        self.assertEqual(result.colnames, ["dec", "ra"])
+
+    def test_objects_columns_reordered_to_sdm(self):
+        scrambled = astropy.table.Table({
+            "ra": [150.0], "diaObjectId": [1], "dec": [2.0],
+            "validityEndMjdTai": [60000.0]})
+        fake = _FakeTapService(scrambled)
+        result = PpdbTap(service=fake).load_objects()
+        self.assertEqual(
+            result.colnames,
+            ["diaObjectId", "validityEndMjdTai", "ra", "dec"])
+
+    def test_load_object_row_in_sdm_order(self):
+        scrambled = astropy.table.Table({
+            "ra": [150.0], "diaObjectId": [7], "dec": [2.0]})
+        fake = _FakeTapService(scrambled)
+        row = PpdbTap(service=fake).load_object(7)
+        self.assertEqual(row.colnames, ["diaObjectId", "ra", "dec"])
+
+    def test_id_list_path_reordered_to_sdm(self):
+        # the chunked many-ids path reorders per page before stacking.
+        scrambled = astropy.table.Table({
+            "band": ["r"], "diaObjectId": [42], "diaSourceId": [100],
+            "midpointMjdTai": [60000.0]})
+        fake = _FakeTapService(scrambled)
+        result = PpdbTap(service=fake).load_sources(diaObjectId=[1, 2],
+                                                    id_chunk_size=1)
+        self.assertEqual(
+            result.colnames,
+            ["diaSourceId", "diaObjectId", "midpointMjdTai", "band"])
+
+
 class TestLightCurve(lsst.utils.tests.TestCase):
     def test_assembles_object_and_series(self):
         tables = [
