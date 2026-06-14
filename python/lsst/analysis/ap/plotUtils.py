@@ -24,7 +24,9 @@
 Three tools live here:
 
 - `lightcurve` plots a per-band psfFlux light curve for a single diaObject,
-  optionally overlaying forced photometry.
+  optionally overlaying forced photometry. It works with either the APDB
+  `DbQuery` interface (pandas) or the PPDB `PpdbTap` interface (astropy
+  Tables).
 - `cutout_grid` lays out science/template/difference cutouts for many
   DiaSources in a single mosaic figure.
 - `summarize_run` returns a per-visit summary DataFrame of an APDB run
@@ -36,6 +38,7 @@ from __future__ import annotations
 
 __all__ = ["lightcurve", "cutout_grid", "summarize_run", "BAND_COLORS"]
 
+import inspect
 import io
 
 import numpy as np
@@ -66,23 +69,54 @@ def _time_column(frame):
                    f"in DataFrame; got columns: {list(frame.columns)}")
 
 
+def _to_dataframe(table):
+    """Return ``table`` as a `pandas.DataFrame`.
+
+    The APDB `DbQuery` loaders already return DataFrames; the PPDB `PpdbTap`
+    loaders return `astropy.table.Table`. Normalizing here lets the plotting
+    code use a single pandas (groupby-based) path regardless of which
+    interface produced the data. Masked astropy values become NaN.
+    """
+    if isinstance(table, pd.DataFrame):
+        return table
+    return table.to_pandas()
+
+
+def _load_object_sources(query, dia_object_id, exclude_flagged):
+    """Load one diaObject's DiaSources as a DataFrame across query interfaces.
+    """
+    method = query.load_sources_for_object
+    if "exclude_flagged" in inspect.signature(method).parameters:
+        sources = method(dia_object_id, exclude_flagged=exclude_flagged)
+    elif exclude_flagged:
+        raise TypeError(
+            f"{type(query).__name__}.load_sources_for_object does not support "
+            "exclude_flagged; the PPDB public interface does not expose "
+            "diaSource flag filtering. Pass exclude_flagged=False.")
+    else:
+        sources = method(dia_object_id)
+    return _to_dataframe(sources)
+
+
 def lightcurve(query, dia_object_id, ax=None, exclude_flagged=False,
                include_forced=True):
     """Plot a per-band psfFlux light curve for one diaObject.
 
     Parameters
     ----------
-    query : `lsst.analysis.ap.apdb.DbQuery`
-        APDB query interface (sqlite, postgres, or cassandra).
+    query : `lsst.analysis.ap.apdb.DbQuery` or \
+            `lsst.analysis.ap.ppdb.PpdbTap`
     dia_object_id : `int`
         Object id to load.
     ax : `matplotlib.axes.Axes`, optional
         Axes to draw into; if None, a new figure is created.
     exclude_flagged : `bool`, optional
-        Forwarded to `load_sources_for_object`. Defaults to False so the
-        lightcurve matches the row count of a direct APDB query; pass
-        True to drop diaSources matching the configured bad-flag list.
-        DiaForcedSources are always loaded unfiltered.
+        Forwarded to `load_sources_for_object` when the query supports it.
+        Defaults to False so the lightcurve matches the row count of a direct
+        APDB query; pass True to drop diaSources matching the configured
+        bad-flag list. The PPDB `PpdbTap` interface does not expose flag
+        filtering, so True is rejected there. DiaForcedSources are always
+        loaded unfiltered.
     include_forced : `bool`, optional
         If True, also overlay diaForcedSources as small markers.
 
@@ -110,14 +144,13 @@ def lightcurve(query, dia_object_id, ax=None, exclude_flagged=False,
                 ha="center", va="center", transform=ax.transAxes)
         return fig, ax, pd.DataFrame(), None
 
-    sources = query.load_sources_for_object(dia_object_id,
-                                            exclude_flagged=exclude_flagged)
+    sources = _load_object_sources(query, dia_object_id, exclude_flagged)
     # DiaForcedSource has a different (and smaller) flag schema than
     # DiaSource: applying the diaSource exclusion list would key into
     # columns that don't exist on the forced table. Forced photometry is
     # also a measurement at a known location rather than a fresh detection,
     # so showing it unfiltered is the right behavior.
-    forced = (query.load_forced_sources_for_object(dia_object_id)
+    forced = (_to_dataframe(query.load_forced_sources_for_object(dia_object_id))
               if include_forced else None)
 
     if len(sources) == 0:
