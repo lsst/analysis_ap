@@ -45,6 +45,7 @@ import lsst.afw.display
 from lsst.daf.butler import DatasetNotFoundError
 from lsst.analysis.ap import plotImageSubtractionCutouts
 from lsst.analysis.ap.compare import match_catalogs
+from lsst.analysis.ap.skymapOverlay import draw_skymap_outlines_afw
 from IPython.display import display, Image, Markdown
 
 
@@ -1237,6 +1238,9 @@ def display_images(butler, visit, detector, backend="firefly", *,
                    color_by=None,
                    mask_transparency=80,
                    strip_metadata=True,
+                   skymap=None,
+                   skymap_ctype="green",
+                   skymap_label_size=1.5,
                    image_datasets=_IMAGE_DATASETS):
     """Display the science, template, and difference images for a given
     visit+detector with diagnostic catalog markers overlaid.
@@ -1295,6 +1299,13 @@ def display_images(butler, visit, detector, backend="firefly", *,
     strip_metadata : `bool`, optional
         Drop ``LTV1``/``LTV2`` keywords from each exposure's metadata
         before sending to the backend. Needed for ds9 to align frames.
+    skymap : `lsst.skymap.BaseSkyMap`, optional
+        If supplied, overlay the boundaries of every tract/patch that
+        touches each frame, labeled ``tract,patch``.
+    skymap_ctype : `str`, optional
+        Display color for the tract/patch outlines and labels.
+    skymap_label_size : `float`, optional
+        Text size for the ``tract,patch`` labels.
     image_datasets : `dict` [`str`, `str`], optional
         Mapping from image-type key (``"science"``, ``"template"``,
         ``"difference"``) to butler dataset name. Override to point at
@@ -1328,10 +1339,14 @@ def display_images(butler, visit, detector, backend="firefly", *,
         afw_display.setMaskTransparency(mask_transparency)
     for frame, image_name in enumerate(("science", "template", "difference")):
         afw_display.frame = frame
-        afw_display.image(images[image_name], title=image_name)
+        image = images[image_name]
+        afw_display.image(image, title=image_name)
         _draw_overlays_on_current_frame(
             afw_display, overlays, reliability_labels, solar_system_labels,
             label_size=label_size)
+        if skymap is not None:
+            draw_skymap_outlines_afw(afw_display, skymap, image.wcs, image.getBBox(),
+                                     ctype=skymap_ctype, label_size=skymap_label_size)
 
     try:
         afw_display.alignImages(match_type="Pixel")
@@ -1355,6 +1370,9 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
                       color_by=None,
                       mask_transparency=80,
                       strip_metadata=True,
+                      skymap=None,
+                      skymap_ctype="green",
+                      skymap_label_size=1.5,
                       image_datasets=_IMAGE_DATASETS):
     """Display one image type side-by-side from two butlers, with overlays.
 
@@ -1378,9 +1396,10 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
         afw display backend (typically "firefly" or "ds9").
     reliability_threshold, show_unfiltered, show_trailed, show_rejected,
     show_marginal, show_solar_system, show_apdb, show_reliability_labels,
-    label_size, color_by, mask_transparency, strip_metadata, image_datasets
-        Same meaning as in `display_images`. Applied to overlays from
-        *both* butlers.
+    label_size, color_by, mask_transparency, strip_metadata,
+    skymap, skymap_ctype, skymap_label_size, image_datasets
+        Same meaning as in `display_images`. Applied to both frames; the
+        tract/patch overlay uses each frame's own exposure WCS.
     """
     if image_type not in image_datasets:
         raise ValueError(
@@ -1426,6 +1445,9 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
         afw_display.image(image, title=f"{image_type} ({tag})")
         _draw_overlays_on_current_frame(afw_display, overlays, rel, ss,
                                         label_size=label_size)
+        if skymap is not None:
+            draw_skymap_outlines_afw(afw_display, skymap, image.wcs, image.getBBox(),
+                                     ctype=skymap_ctype, label_size=skymap_label_size)
 
     try:
         afw_display.alignImages(match_type="Pixel")

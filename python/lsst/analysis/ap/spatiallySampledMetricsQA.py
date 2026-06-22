@@ -44,6 +44,8 @@ __all__ = ["subtraction_quality_report"]
 import numpy as np
 import pandas as pd
 
+from lsst.analysis.ap.skymapOverlay import make_affine_sky_to_xy, draw_skymap_outlines_mpl
+
 # Mask-fraction columns whose sum indicates a sample sits on an unusable
 # region of the detector. The headline scalars are computed only on samples
 # below ``bad_mask_threshold`` so the distribution tails reflect subtraction
@@ -241,19 +243,12 @@ def _overlay_kernel_quiver(ax, clean):
 def _draw_skymap_outlines(ax, skymap, clean, label_fontsize=7):
     """Overlay patch boundaries (with tract,patch labels) on a panel.
 
-    The sky↔detector pixel mapping is derived from the sample positions'
-    ``(x, y)`` and ``(coord_ra, coord_dec)`` columns via a least-squares
-    affine fit. For a single detector this is typically accurate to well
-    under a pixel — enough for visualization but not for science.
-
-    Each overlapping patch gets a thin outline plus a ``tract,patch``
-    label placed along the midpoint of its longest visible edge inside
-    the panel.
-
-    When more than one tract overlaps the panel (e.g. detectors near a
-    tract boundary), patches are distinguished by linestyle. Tracts are
-    ranked by their total visible patch area within the panel, and
-    assigned: solid, dashed, dotted, dash-dotted.
+    The metrics table carries no WCS, so the sky↔detector pixel mapping is
+    derived from the sample positions' ``(x, y)`` and
+    ``(coord_ra, coord_dec)`` columns via a least-squares affine fit (see
+    `~lsst.analysis.ap.skymapOverlay.make_affine_sky_to_xy`). For a single
+    detector this is typically accurate to well under a pixel — enough for
+    visualization but not for science.
 
     Silently no-ops when sky coordinates aren't available or fewer than
     three samples are valid.
@@ -270,30 +265,8 @@ def _draw_skymap_outlines(ax, skymap, clean, label_fontsize=7):
         return
 
     import lsst.geom as geom
-    import matplotlib.patheffects as pe
 
-    # Preserve the current view: tract outlines almost always extend far
-    # beyond the detector footprint, and matplotlib would otherwise auto-
-    # rescale the panel to fit them, shrinking the actual data to a dot.
-    xlim = ax.get_xlim()
-    ylim = ax.get_ylim()
-
-    A = np.column_stack([np.ones(valid.sum()), ra[valid], dec[valid]])
-    coef_x, *_ = np.linalg.lstsq(A, xs[valid], rcond=None)
-    coef_y, *_ = np.linalg.lstsq(A, ys[valid], rcond=None)
-
-    def sky_to_xy(sphere_point):
-        r = sphere_point.getRa().asRadians()
-        d = sphere_point.getDec().asRadians()
-        return (float(coef_x[0] + coef_x[1]*r + coef_x[2]*d),
-                float(coef_y[0] + coef_y[1]*r + coef_y[2]*d))
-
-    def _draw_polygon(corners_tract_px, tract_wcs, **plot_kwargs):
-        sky_corners = [tract_wcs.pixelToSky(p) for p in corners_tract_px]
-        xy = [sky_to_xy(c) for c in sky_corners]
-        xs_c = [p[0] for p in xy] + [xy[0][0]]
-        ys_c = [p[1] for p in xy] + [xy[0][1]]
-        ax.plot(xs_c, ys_c, **plot_kwargs)
+    sky_to_xy = make_affine_sky_to_xy(ra[valid], dec[valid], xs[valid], ys[valid])
 
     # Build a coord list spanning the sample footprint so findTractPatchList
     # returns every tract / patch that touches it.
@@ -303,206 +276,10 @@ def _draw_skymap_outlines(ax, skymap, clean, label_fontsize=7):
         (ra[valid].max(), dec[valid].max()),
         (ra[valid].min(), dec[valid].max()),
     ]
-    coord_list = [geom.SpherePoint(r, d, geom.radians) for r, d in corner_pairs]
-    tract_patch_list = skymap.findTractPatchList(coord_list)
+    sky_corners = [geom.SpherePoint(r, d, geom.radians) for r, d in corner_pairs]
 
-    # White lines with a thin black stroke read on any colormap background.
-    line_outline = [pe.withStroke(linewidth=2.0, foreground="black")]
-    text_outline = [pe.withStroke(linewidth=1.4, foreground="black")]
-
-    xmin, xmax = xlim
-    ymin, ymax = ylim
-
-    # Pre-project every patch's corners into panel pixel coords, and
-    # accumulate the visible patch area for each tract so we can rank
-    # tracts by how much of the image they cover.
-    tract_entries = []  # list of (visible_area, tract_info, [(patch, xy_corners), ...])
-    for tract_info, patches in tract_patch_list:
-        tract_wcs = tract_info.wcs
-        per_tract_patches = []
-        per_tract_area = 0.0
-        for patch in patches:
-            bbox = patch.getInnerBBox()
-            corners_px = [geom.Point2D(bbox.minX, bbox.minY),
-                          geom.Point2D(bbox.maxX, bbox.minY),
-                          geom.Point2D(bbox.maxX, bbox.maxY),
-                          geom.Point2D(bbox.minX, bbox.maxY)]
-            xy_corners = [sky_to_xy(tract_wcs.pixelToSky(p))
-                          for p in corners_px]
-            clipped = _clip_polygon_to_rect(xy_corners,
-                                            xmin, xmax, ymin, ymax)
-            per_tract_area += _polygon_area(clipped)
-            per_tract_patches.append((patch, corners_px, xy_corners))
-        tract_entries.append((per_tract_area, tract_info, per_tract_patches))
-
-    # Linestyles for the four most-overlapping tracts, in rank order.
-    linestyles = ("-", "--", ":", "-.")
-    # Sort by descending overlap area. Ties are broken by tract id so the
-    # ordering is deterministic from one call to the next on the same
-    # dataset.
-    tract_entries.sort(key=lambda e: (-e[0], e[1].getId()))
-
-    for rank, (area, tract_info, per_tract_patches) in enumerate(tract_entries):
-        tract_wcs = tract_info.wcs
-        tract_id = tract_info.getId()
-        linestyle = linestyles[rank] if rank < len(linestyles) else "-"
-        patch_kwargs = dict(color="white", linewidth=0.5, alpha=0.85,
-                            linestyle=linestyle,
-                            path_effects=line_outline, zorder=6)
-        for patch, corners_px, xy_corners in per_tract_patches:
-            bbox = patch.getInnerBBox()
-            _draw_polygon(corners_px, tract_wcs, **patch_kwargs)
-
-            # Place the label at the midpoint of the patch edge with the
-            # longest visible portion within the panel, offset slightly
-            # toward the patch center so the text sits inside.
-            center_tract = geom.Point2D(0.5*(bbox.minX + bbox.maxX),
-                                        0.5*(bbox.minY + bbox.maxY))
-            cx, cy = sky_to_xy(tract_wcs.pixelToSky(center_tract))
-
-            best = None
-            for i in range(4):
-                (x0, y0), (x1, y1) = xy_corners[i], xy_corners[(i + 1) % 4]
-                clipped = _clip_segment_to_rect(x0, y0, x1, y1,
-                                                xmin, xmax, ymin, ymax)
-                if clipped is None:
-                    continue
-                cx0, cy0, cx1, cy1 = clipped
-                length = float(np.hypot(cx1 - cx0, cy1 - cy0))
-                if best is None or length > best[0]:
-                    best = (length, cx0, cy0, cx1, cy1)
-            if best is None:
-                continue  # entire patch is outside the panel
-            length, cx0, cy0, cx1, cy1 = best
-            mx = 0.5*(cx0 + cx1)
-            my = 0.5*(cy0 + cy1)
-            # Inward offset toward the projected patch center. Use the
-            # smaller of "fixed fraction of edge length" and "fraction of
-            # the midpoint-to-center distance" so the offset never lands
-            # outside the patch on slivers.
-            dx, dy = cx - mx, cy - my
-            d_center = float(np.hypot(dx, dy))
-            if d_center > 0:
-                step = min(0.06*length, 0.4*d_center)
-                mx += dx/d_center * step
-                my += dy/d_center * step
-
-            # Rotate the text to lie parallel to the visible edge, flipping
-            # to keep it reading right-side-up (angle clamped to [-90, 90]).
-            angle_deg = float(np.degrees(np.arctan2(cy1 - cy0, cx1 - cx0)))
-            if angle_deg > 90.0:
-                angle_deg -= 180.0
-            elif angle_deg < -90.0:
-                angle_deg += 180.0
-
-            ax.text(mx, my,
-                    f"{tract_id},{patch.getSequentialIndex()}",
-                    ha="center", va="center",
-                    rotation=angle_deg, rotation_mode="anchor",
-                    color="white", fontsize=label_fontsize,
-                    path_effects=text_outline, zorder=7,
-                    clip_on=True)
-
-    ax.set_xlim(xlim)
-    ax.set_ylim(ylim)
-
-
-def _clip_polygon_to_rect(polygon, xmin, xmax, ymin, ymax):
-    """Clip a convex polygon against an axis-aligned rectangle.
-
-    Parameters
-    ----------
-    polygon : sequence of ``(x, y)`` tuples
-        Vertices of the (convex) input polygon, in order.
-    xmin, xmax, ymin, ymax : `float`
-        The clipping rectangle.
-
-    Returns
-    -------
-    clipped : `list` of ``(x, y)`` tuples
-        The clipped polygon, or an empty list if the polygon lies
-        entirely outside the rectangle.
-    """
-    # Each clip edge is parameterized by ("axis", value, keep_side)
-    # where keep_side is +1 if "inside" means coordinate >= value,
-    # -1 if "inside" means coordinate <= value.
-    edges = (("x", xmin, +1), ("x", xmax, -1),
-             ("y", ymin, +1), ("y", ymax, -1))
-
-    def _inside(point, axis, val, sign):
-        coord = point[0] if axis == "x" else point[1]
-        return (coord - val)*sign >= 0.0
-
-    def _intersect(p1, p2, axis, val):
-        x1, y1 = p1
-        x2, y2 = p2
-        if axis == "x":
-            t = (val - x1)/(x2 - x1)
-            return (val, y1 + t*(y2 - y1))
-        t = (val - y1)/(y2 - y1)
-        return (x1 + t*(x2 - x1), val)
-
-    output = list(polygon)
-    for axis, val, sign in edges:
-        if not output:
-            return []
-        input_list = output
-        output = []
-        for i in range(len(input_list)):
-            curr = input_list[i]
-            prev = input_list[i - 1]
-            curr_in = _inside(curr, axis, val, sign)
-            prev_in = _inside(prev, axis, val, sign)
-            if curr_in:
-                if not prev_in:
-                    output.append(_intersect(prev, curr, axis, val))
-                output.append(curr)
-            elif prev_in:
-                output.append(_intersect(prev, curr, axis, val))
-    return output
-
-
-def _polygon_area(polygon):
-    """Area of a polygon via the shoelace formula."""
-    n = len(polygon)
-    if n < 3:
-        return 0.0
-    s = 0.0
-    for i in range(n):
-        x1, y1 = polygon[i]
-        x2, y2 = polygon[(i + 1) % n]
-        s += x1*y2 - x2*y1
-    return abs(s)*0.5
-
-
-def _clip_segment_to_rect(x0, y0, x1, y1, xmin, xmax, ymin, ymax):
-    """Liang-Barsky line-segment clipping against an axis-aligned rect.
-
-    Returns the clipped endpoints ``(x0', y0', x1', y1')`` or ``None`` if
-    the segment lies entirely outside the rectangle.
-    """
-    dx = x1 - x0
-    dy = y1 - y0
-    p = (-dx, dx, -dy, dy)
-    q = (x0 - xmin, xmax - x0, y0 - ymin, ymax - y0)
-    u1, u2 = 0.0, 1.0
-    for pi, qi in zip(p, q):
-        if pi == 0.0:
-            if qi < 0.0:
-                return None
-        else:
-            t = qi/pi
-            if pi < 0.0:
-                if t > u2:
-                    return None
-                if t > u1:
-                    u1 = t
-            else:
-                if t < u1:
-                    return None
-                if t < u2:
-                    u2 = t
-    return (x0 + u1*dx, y0 + u1*dy, x0 + u2*dx, y0 + u2*dy)
+    draw_skymap_outlines_mpl(ax, skymap, sky_to_xy, sky_corners,
+                             label_fontsize=label_fontsize)
 
 
 def _make_figure(clean, chi2_scale=1.0, skymap=None, label_fontsize=7,
