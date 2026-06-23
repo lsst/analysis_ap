@@ -1070,8 +1070,8 @@ def _group_sources_by_flag(table, flag_names, palette=_FLAG_PALETTE):
 def _collect_overlays(butler, data_id, wcs, *,
                       reliability_threshold,
                       show_unfiltered, show_trailed,
-                      show_rejected, show_marginal, show_solar_system,
-                      show_apdb, show_reliability_labels,
+                      show_rejected, show_marginal, show_kernel_sources,
+                      show_solar_system, show_apdb, show_reliability_labels,
                       color_by):
     """Load catalogs from one butler and build the overlay record list.
 
@@ -1130,6 +1130,10 @@ def _collect_overlays(butler, data_id, wcs, *,
     if show_marginal:
         _add(_try_get("marginal_new_dia_source"),
              symbol="+", size=10, ctype="yellow", legend="marginal new diaSource")
+    if show_kernel_sources:
+        _add(_try_get("difference_kernel_sources"),
+             symbol="o", size=12, ctype="green",
+             legend="psf-matching kernel source")
 
     # Load dia_source_apdb once: it backs the APDB reliability overlay and
     # also supplies pixel x/y for the solar-system overlay (ss_source_detector
@@ -1231,6 +1235,7 @@ def display_images(butler, visit, detector, backend="firefly", *,
                    show_trailed=True,
                    show_rejected=True,
                    show_marginal=True,
+                   show_kernel_sources=True,
                    show_solar_system=True,
                    show_apdb=True,
                    show_reliability_labels=True,
@@ -1258,6 +1263,7 @@ def display_images(butler, visit, detector, backend="firefly", *,
     long-trailed sources          ``x``    magenta
     rejected diaSources           ``+``    orange
     marginal new diaSources       ``+``    yellow
+    psf-matching kernel sources   ``o``    green
     solar-system matches          ``o``    cyan
     APDB, reliability > threshold ``o``    blue (+ score text)
     APDB, reliability ≤ threshold ``o``    red
@@ -1275,8 +1281,11 @@ def display_images(butler, visit, detector, backend="firefly", *,
         APDB diaSources with reliability strictly greater than this are
         drawn as "good" (blue); the rest as "bad" (red).
     show_unfiltered, show_trailed, show_rejected, show_marginal,
-    show_solar_system, show_apdb : `bool`, optional
-        Toggle individual catalog overlays.
+    show_kernel_sources, show_solar_system, show_apdb : `bool`, optional
+        Toggle individual catalog overlays. ``show_kernel_sources``
+        loads ``difference_kernel_sources``, the PSF-matching constraint
+        sources from image subtraction — useful for seeing where the
+        kernel was actually anchored vs extrapolated.
     show_reliability_labels : `bool`, optional
         If True, annotate each good APDB diaSource with its reliability score.
     label_size : `int`, optional
@@ -1326,7 +1335,9 @@ def display_images(butler, visit, detector, backend="firefly", *,
         reliability_threshold=reliability_threshold,
         show_unfiltered=show_unfiltered,
         show_trailed=show_trailed, show_rejected=show_rejected,
-        show_marginal=show_marginal, show_solar_system=show_solar_system,
+        show_marginal=show_marginal,
+        show_kernel_sources=show_kernel_sources,
+        show_solar_system=show_solar_system,
         show_apdb=show_apdb,
         show_reliability_labels=show_reliability_labels,
         color_by=color_by,
@@ -1363,6 +1374,7 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
                       show_trailed=True,
                       show_rejected=True,
                       show_marginal=True,
+                      show_kernel_sources=True,
                       show_solar_system=True,
                       show_apdb=True,
                       show_reliability_labels=True,
@@ -1395,9 +1407,9 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
     backend : `str`, optional
         afw display backend (typically "firefly" or "ds9").
     reliability_threshold, show_unfiltered, show_trailed, show_rejected,
-    show_marginal, show_solar_system, show_apdb, show_reliability_labels,
-    label_size, color_by, mask_transparency, strip_metadata,
-    skymap, skymap_ctype, skymap_label_size, image_datasets
+    show_marginal, show_kernel_sources, show_solar_system, show_apdb,
+    show_reliability_labels, label_size, color_by, mask_transparency,
+    strip_metadata, skymap, skymap_ctype, skymap_label_size, image_datasets
         Same meaning as in `display_images`. Applied to both frames; the
         tract/patch overlay uses each frame's own exposure WCS.
     """
@@ -1423,7 +1435,9 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
         reliability_threshold=reliability_threshold,
         show_unfiltered=show_unfiltered,
         show_trailed=show_trailed, show_rejected=show_rejected,
-        show_marginal=show_marginal, show_solar_system=show_solar_system,
+        show_marginal=show_marginal,
+        show_kernel_sources=show_kernel_sources,
+        show_solar_system=show_solar_system,
         show_apdb=show_apdb, show_reliability_labels=show_reliability_labels,
         color_by=color_by,
     )
