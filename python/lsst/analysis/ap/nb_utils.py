@@ -1109,6 +1109,11 @@ def _collect_overlays(butler, data_id, wcs, *,
             y_arr = table["y"].data
         overlays.append((x_arr, y_arr, symbol, size, ctype, legend))
 
+    # Catalogs are added in AP-pipeline-creation order
+    if show_kernel_sources:
+        _add(_try_get("difference_kernel_sources"),
+             symbol="o", size=12, ctype="green",
+             legend="psf-matching kernel source")
     if show_unfiltered:
         unfiltered = _try_get("dia_source_unfiltered")
         if unfiltered is not None and len(unfiltered) > 0:
@@ -1120,20 +1125,12 @@ def _collect_overlays(butler, data_id, wcs, *,
             else:
                 _add(non_sky, symbol="+", size=10, ctype="red",
                      legend="unfiltered candidate")
-
-    if show_trailed:
-        _add(_try_get("long_trailed_source_detector"),
-             symbol="x", size=30, ctype="magenta", legend="long-trailed source")
     if show_rejected:
         _add(_try_get("rejected_dia_source"),
              symbol="+", size=10, ctype="orange", legend="rejected diaSource")
-    if show_marginal:
-        _add(_try_get("marginal_new_dia_source"),
-             symbol="+", size=10, ctype="yellow", legend="marginal new diaSource")
-    if show_kernel_sources:
-        _add(_try_get("difference_kernel_sources"),
-             symbol="o", size=12, ctype="green",
-             legend="psf-matching kernel source")
+    if show_trailed:
+        _add(_try_get("long_trailed_source_detector"),
+             symbol="x", size=30, ctype="magenta", legend="long-trailed source")
 
     # Load dia_source_apdb once: it backs the APDB reliability overlay and
     # also supplies pixel x/y for the solar-system overlay (ss_source_detector
@@ -1141,6 +1138,23 @@ def _collect_overlays(butler, data_id, wcs, *,
     dia_apdb = None
     if show_solar_system or show_apdb:
         dia_apdb = _try_get("dia_source_apdb")
+
+    reliability_labels = None
+    if show_apdb:
+        if dia_apdb is not None and len(dia_apdb) > 0:
+            good_mask = dia_apdb["reliability"] > reliability_threshold
+            good_src = dia_apdb[good_mask]
+            bad_src = dia_apdb[~good_mask]
+            _add(good_src, symbol="o", size=14, ctype="blue", use_radec=False,
+                 legend=f"APDB, reliability > {reliability_threshold:g}")
+            _add(bad_src, symbol="o", size=14, ctype="red", use_radec=False,
+                 legend=f"APDB, reliability <= {reliability_threshold:g}")
+            if show_reliability_labels and len(good_src) > 0:
+                reliability_labels = {
+                    "x": good_src["x"].data,
+                    "y": good_src["y"].data,
+                    "reliability": good_src["reliability"],
+                }
 
     solar_system_labels = None
     if show_solar_system:
@@ -1158,25 +1172,12 @@ def _collect_overlays(butler, data_id, wcs, *,
                 x_arr = np.asarray(dia_apdb["x"])[apdb_idx]
                 y_arr = np.asarray(dia_apdb["y"])[apdb_idx]
                 designation = np.asarray(ss["designation"])[keep]
-                overlays.append((x_arr, y_arr, "o", 12, "cyan", "solar-system match"))
+                overlays.append((x_arr, y_arr, "o", 16, "cyan", "solar-system match"))
                 solar_system_labels = {"x": x_arr, "y": y_arr, "designation": designation, }
 
-    reliability_labels = None
-    if show_apdb:
-        if dia_apdb is not None and len(dia_apdb) > 0:
-            good_mask = dia_apdb["reliability"] > reliability_threshold
-            good_src = dia_apdb[good_mask]
-            bad_src = dia_apdb[~good_mask]
-            _add(good_src, symbol="o", size=12, ctype="blue", use_radec=False,
-                 legend=f"APDB, reliability > {reliability_threshold:g}")
-            _add(bad_src, symbol="o", size=12, ctype="red", use_radec=False,
-                 legend=f"APDB, reliability <= {reliability_threshold:g}")
-            if show_reliability_labels and len(good_src) > 0:
-                reliability_labels = {
-                    "x": good_src["x"].data,
-                    "y": good_src["y"].data,
-                    "reliability": good_src["reliability"],
-                }
+    if show_marginal:
+        _add(_try_get("marginal_new_dia_source"),
+             symbol="+", size=10, ctype="yellow", legend="marginal new diaSource")
 
     return overlays, reliability_labels, solar_system_labels
 
@@ -1254,20 +1255,23 @@ def display_images(butler, visit, detector, backend="firefly", *,
     overlays are drawn on each. Catalogs that are missing from the butler
     are silently skipped, so the same call works against partial outputs.
 
-    Default overlay key:
+    Default overlay key. Rows are in AP-pipeline creation order, so the
+    last marker drawn at any pixel reflects the latest classification the
+    pipeline assigned. Circle sizes step by 2 so successive ``o`` markers
+    nest rather than stack.
 
-    ============================  =======  ==========================
-    catalog                       symbol   color
-    ============================  =======  ==========================
-    unfiltered candidates         ``+``    red
-    long-trailed sources          ``x``    magenta
-    rejected diaSources           ``+``    orange
-    marginal new diaSources       ``+``    yellow
-    psf-matching kernel sources   ``o``    green
-    solar-system matches          ``o``    cyan
-    APDB, reliability > threshold ``o``    blue (+ score text)
-    APDB, reliability ≤ threshold ``o``    red
-    ============================  =======  ==========================
+    ============================  =======  ====  ===========================
+    catalog                       symbol   size  color
+    ============================  =======  ====  ===========================
+    psf-matching kernel sources   ``o``    12    green
+    unfiltered candidates         ``+``    10    red
+    rejected diaSources           ``+``    10    orange
+    long-trailed sources          ``x``    30    magenta
+    APDB, reliability > threshold ``o``    14    blue (+ score text)
+    APDB, reliability ≤ threshold ``o``    14    red
+    solar-system matches          ``o``    16    cyan
+    marginal new diaSources       ``+``    10    yellow
+    ============================  =======  ====  ===========================
 
     Parameters
     ----------
