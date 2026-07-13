@@ -1070,8 +1070,9 @@ def _group_sources_by_flag(table, flag_names, palette=_FLAG_PALETTE):
 def _collect_overlays(butler, data_id, wcs, *,
                       reliability_threshold,
                       show_unfiltered, show_trailed,
-                      show_rejected, show_marginal, show_kernel_sources,
-                      show_solar_system, show_apdb, show_reliability_labels,
+                      show_rejected, show_standardized, show_marginal,
+                      show_kernel_sources, show_solar_system, show_apdb,
+                      show_reliability_labels,
                       color_by):
     """Load catalogs from one butler and build the overlay record list.
 
@@ -1131,6 +1132,20 @@ def _collect_overlays(butler, data_id, wcs, *,
     if show_trailed:
         _add(_try_get("long_trailed_source_detector"),
              symbol="x", size=30, ctype="magenta", legend="long-trailed source")
+    # `standardizeDiaSource` runs between filterDiaSource and
+    # associateApdb; when the pipeline stops before the APDB ingest,
+    # dia_source_detector is the last diaSource catalog available.
+    standardized_labels = None
+    if show_standardized:
+        standardized = _try_get("dia_source_detector")
+        if standardized is not None and len(standardized) > 0:
+            xy = get_xy_from_source_table(standardized, wcs)
+            x_arr = xy["x"].data
+            y_arr = xy["y"].data
+            overlays.append((x_arr, y_arr, "+", 10, "blue", "standardized diaSource"))
+            if show_reliability_labels:
+                standardized_labels = {"x": x_arr, "y": y_arr,
+                                       "reliability": standardized["reliability"]}
 
     # Load dia_source_apdb once: it backs the APDB reliability overlay and
     # also supplies pixel x/y for the solar-system overlay (ss_source_detector
@@ -1178,6 +1193,15 @@ def _collect_overlays(butler, data_id, wcs, *,
     if show_marginal:
         _add(_try_get("marginal_new_dia_source"),
              symbol="+", size=10, ctype="yellow", legend="marginal new diaSource")
+
+    # Draw reliability score text at most once per diaSource: prefer
+    # APDB labels when APDB is being displayed, and otherwise fall back
+    # to standardized-diaSource labels (useful when the pipeline stops
+    # before APDB ingest).
+    if reliability_labels is None:
+        apdb_shown = show_apdb and dia_apdb is not None and len(dia_apdb) > 0
+        if not apdb_shown:
+            reliability_labels = standardized_labels
 
     return overlays, reliability_labels, solar_system_labels
 
@@ -1235,6 +1259,7 @@ def display_images(butler, visit, detector, backend="firefly", *,
                    show_unfiltered=True,
                    show_trailed=True,
                    show_rejected=True,
+                   show_standardized=True,
                    show_marginal=True,
                    show_kernel_sources=True,
                    show_solar_system=True,
@@ -1267,6 +1292,7 @@ def display_images(butler, visit, detector, backend="firefly", *,
     unfiltered candidates         ``+``    10    red
     rejected diaSources           ``+``    10    orange
     long-trailed sources          ``x``    30    magenta
+    standardized diaSources       ``+``    10    blue
     APDB, reliability > threshold ``o``    14    blue (+ score text)
     APDB, reliability ≤ threshold ``o``    14    red
     solar-system matches          ``o``    16    cyan
@@ -1284,8 +1310,9 @@ def display_images(butler, visit, detector, backend="firefly", *,
     reliability_threshold : `float`, optional
         APDB diaSources with reliability strictly greater than this are
         drawn as "good" (blue); the rest as "bad" (red).
-    show_unfiltered, show_trailed, show_rejected, show_marginal,
-    show_kernel_sources, show_solar_system, show_apdb : `bool`, optional
+    show_unfiltered, show_trailed, show_rejected, show_standardized,
+    show_marginal, show_kernel_sources, show_solar_system,
+    show_apdb : `bool`, optional
         Toggle individual catalog overlays. ``show_kernel_sources``
         loads ``difference_kernel_sources``, the PSF-matching constraint
         sources from image subtraction — useful for seeing where the
@@ -1339,6 +1366,7 @@ def display_images(butler, visit, detector, backend="firefly", *,
         reliability_threshold=reliability_threshold,
         show_unfiltered=show_unfiltered,
         show_trailed=show_trailed, show_rejected=show_rejected,
+        show_standardized=show_standardized,
         show_marginal=show_marginal,
         show_kernel_sources=show_kernel_sources,
         show_solar_system=show_solar_system,
@@ -1377,6 +1405,7 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
                       show_unfiltered=True,
                       show_trailed=True,
                       show_rejected=True,
+                      show_standardized=True,
                       show_marginal=True,
                       show_kernel_sources=True,
                       show_solar_system=True,
@@ -1411,9 +1440,10 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
     backend : `str`, optional
         afw display backend (typically "firefly" or "ds9").
     reliability_threshold, show_unfiltered, show_trailed, show_rejected,
-    show_marginal, show_kernel_sources, show_solar_system, show_apdb,
-    show_reliability_labels, label_size, color_by, mask_transparency,
-    strip_metadata, skymap, skymap_ctype, skymap_label_size, image_datasets
+    show_standardized, show_marginal, show_kernel_sources,
+    show_solar_system, show_apdb, show_reliability_labels, label_size,
+    color_by, mask_transparency, strip_metadata, skymap, skymap_ctype,
+    skymap_label_size, image_datasets
         Same meaning as in `display_images`. Applied to both frames; the
         tract/patch overlay uses each frame's own exposure WCS.
     """
@@ -1439,6 +1469,7 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
         reliability_threshold=reliability_threshold,
         show_unfiltered=show_unfiltered,
         show_trailed=show_trailed, show_rejected=show_rejected,
+        show_standardized=show_standardized,
         show_marginal=show_marginal,
         show_kernel_sources=show_kernel_sources,
         show_solar_system=show_solar_system,
