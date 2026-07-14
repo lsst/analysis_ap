@@ -1067,12 +1067,76 @@ def _group_sources_by_flag(table, flag_names, palette=_FLAG_PALETTE):
     return buckets
 
 
+def _line_segments_from(source_table, wcs, *, flag_col, angle_col, ctype,
+                        length_col=None, fixed_length=None,
+                        min_length=None, length_scale=1.0, thickness=1.5):
+    """Build centered line-segment endpoints from a source catalog.
+
+    Sources are selected by ``flag_col`` (rows where the boolean column
+    is True) when given, then optionally by ``length_col > min_length``
+    (only meaningful when ``length_col`` is set), then always by
+    ``sky_source == False`` when that column is present. Endpoints are
+    the source centroid ± half the (scaled) length along ``angle_col``.
+
+    Exactly one of ``length_col`` (per-source measurement, e.g.
+    ``ext_trailedSources_Naive_length`` in pixels) or ``fixed_length``
+    (constant, in pixels — used for markers whose real separation is
+    below display resolution) must be given. Length units are pixels
+    and angle units are radians in the detector frame, matching the
+    raw ``ip_diffim`` and ``ext_trailedSources`` measurement outputs
+    on ``dia_source_unfiltered``. ``length_scale`` multiplies measured
+    lengths after filtering; it is a no-op when ``fixed_length`` is
+    used, since a "fixed" length by definition is not magnified.
+
+    ``thickness`` is the stroke width forwarded to ``afw_display.line``;
+    stored as ``size`` in the returned dict.
+
+    Returns a dict ``{"x1", "y1", "x2", "y2", "ctype", "size"}`` of
+    numpy arrays and scalars, or ``None`` if the table is missing/empty
+    or any referenced column is absent.
+    """
+    if (length_col is None) == (fixed_length is None):
+        raise ValueError("_line_segments_from: pass exactly one of "
+                         "length_col or fixed_length")
+    if source_table is None or len(source_table) == 0:
+        return None
+    try:
+        angle = np.asarray(source_table[angle_col], dtype=float)
+        mask = (np.asarray(source_table[flag_col], dtype=bool) if flag_col is not None
+                else np.ones(len(source_table), dtype=bool))
+        if length_col is not None:
+            length = np.asarray(source_table[length_col], dtype=float)
+        else:
+            length = np.full(len(source_table), fixed_length, dtype=float)
+    except KeyError:
+        return None
+    if length_col is not None and min_length is not None:
+        mask = mask & (length > min_length)
+    try:
+        mask = mask & ~np.asarray(source_table["sky_source"], dtype=bool)
+    except KeyError:
+        pass
+    if not mask.any():
+        return None
+    xy = get_xy_from_source_table(source_table[mask], wcs)
+    x0 = xy["x"].data
+    y0 = xy["y"].data
+    effective_scale = length_scale if fixed_length is None else 1.0
+    half = length[mask] * effective_scale / 2.0
+    dx = half * np.cos(angle[mask])
+    dy = half * np.sin(angle[mask])
+    return {"x1": x0 - dx, "y1": y0 - dy,
+            "x2": x0 + dx, "y2": y0 + dy,
+            "ctype": ctype, "size": thickness}
+
+
 def _collect_overlays(butler, data_id, wcs, *,
                       reliability_threshold,
                       show_unfiltered, show_trailed,
                       show_rejected, show_standardized, show_marginal,
                       show_kernel_sources, show_solar_system, show_apdb,
-                      show_reliability_labels,
+                      show_reliability_labels, show_dipoles,
+                      show_trail_geometry, line_length_scale,
                       color_by):
     """Load catalogs from one butler and build the overlay record list.
 
@@ -1083,12 +1147,18 @@ def _collect_overlays(butler, data_id, wcs, *,
     -------
     overlays : list of ``(x_arr, y_arr, symbol, size, ctype, legend)`` tuples.
     reliability_labels : dict or None
-        ``{"x", "y", "reliability"}`` arrays for the good APDB diaSources,
-        suitable for drawing text annotations next to each marker.
+        ``{"x", "y", "reliability"}`` arrays for the diaSources whose
+        reliability score should be drawn as text.
     solar_system_labels : dict or None
         ``{"x", "y", "designation"}`` arrays for matched solar-system
         sources, suitable for drawing the designation as text next to each
         marker.
+    dipole_segments, trail_segments : dict or None
+        Each ``{"x1", "y1", "x2", "y2", "ctype"}`` arrays describing line
+        segments through diaSource centroids to visualize dipole
+        (``isDipole`` / ``dipoleLength`` / ``dipoleAngle``) and trail
+        (``trailLength`` / ``trailAngle``) geometry from the standardized
+        or APDB catalog.
     """
     def _try_get(dataset):
         try:
@@ -1115,27 +1185,37 @@ def _collect_overlays(butler, data_id, wcs, *,
         _add(_try_get("difference_kernel_sources"),
              symbol="o", size=12, ctype="green",
              legend="psf-matching kernel source")
-    if show_unfiltered:
+
+    # Load dia_source_unfiltered once — it backs the unfiltered marker
+    # overlay AND the dipole/trail line-segment overlays below (which
+    # always read from the unfiltered catalog because dipoles and long
+    # trails are filtered out of the downstream catalogs).
+    unfiltered = None
+    if show_unfiltered or show_dipoles or show_trail_geometry:
         unfiltered = _try_get("dia_source_unfiltered")
-        if unfiltered is not None and len(unfiltered) > 0:
-            non_sky = unfiltered[~unfiltered["sky_source"]]
-            if color_by:
-                for sub, ctype, flag in _group_sources_by_flag(non_sky, color_by):
-                    _add(sub, symbol="+", size=10, ctype=ctype,
-                         legend=f"unfiltered: {flag}")
-            else:
-                _add(non_sky, symbol="+", size=10, ctype="red",
-                     legend="unfiltered candidate")
+
+    if show_unfiltered and unfiltered is not None and len(unfiltered) > 0:
+        non_sky = unfiltered[~unfiltered["sky_source"]]
+        if color_by:
+            for sub, ctype, flag in _group_sources_by_flag(non_sky, color_by):
+                _add(sub, symbol="+", size=10, ctype=ctype,
+                     legend=f"unfiltered: {flag}")
+        else:
+            _add(non_sky, symbol="+", size=10, ctype="red",
+                 legend="unfiltered candidate")
     if show_rejected:
         _add(_try_get("rejected_dia_source"),
              symbol="+", size=10, ctype="orange", legend="rejected diaSource")
     if show_trailed:
         _add(_try_get("long_trailed_source_detector"),
              symbol="x", size=30, ctype="magenta", legend="long-trailed source")
-    # `standardizeDiaSource` runs between filterDiaSource and
-    # associateApdb; when the pipeline stops before the APDB ingest,
-    # dia_source_detector is the last diaSource catalog available.
-    standardized_labels = None
+
+    # Stash the standardized catalog + projected xy for reuse by the
+    # geometry overlays below. `standardizeDiaSource` runs between
+    # filterDiaSource and associateApdb; when the pipeline stops before
+    # the APDB ingest, dia_source_detector is the last diaSource catalog
+    # available.
+    standardized_data = None
     if show_standardized:
         standardized = _try_get("dia_source_detector")
         if standardized is not None and len(standardized) > 0:
@@ -1143,9 +1223,7 @@ def _collect_overlays(butler, data_id, wcs, *,
             x_arr = xy["x"].data
             y_arr = xy["y"].data
             overlays.append((x_arr, y_arr, "+", 10, "blue", "standardized diaSource"))
-            if show_reliability_labels:
-                standardized_labels = {"x": x_arr, "y": y_arr,
-                                       "reliability": standardized["reliability"]}
+            standardized_data = {"catalog": standardized, "x": x_arr, "y": y_arr}
 
     # Load dia_source_apdb once: it backs the APDB reliability overlay and
     # also supplies pixel x/y for the solar-system overlay (ss_source_detector
@@ -1154,22 +1232,12 @@ def _collect_overlays(butler, data_id, wcs, *,
     if show_solar_system or show_apdb:
         dia_apdb = _try_get("dia_source_apdb")
 
-    reliability_labels = None
-    if show_apdb:
-        if dia_apdb is not None and len(dia_apdb) > 0:
-            good_mask = dia_apdb["reliability"] > reliability_threshold
-            good_src = dia_apdb[good_mask]
-            bad_src = dia_apdb[~good_mask]
-            _add(good_src, symbol="o", size=14, ctype="blue", use_radec=False,
-                 legend=f"APDB, reliability > {reliability_threshold:g}")
-            _add(bad_src, symbol="o", size=14, ctype="red", use_radec=False,
-                 legend=f"APDB, reliability <= {reliability_threshold:g}")
-            if show_reliability_labels and len(good_src) > 0:
-                reliability_labels = {
-                    "x": good_src["x"].data,
-                    "y": good_src["y"].data,
-                    "reliability": good_src["reliability"],
-                }
+    if show_apdb and dia_apdb is not None and len(dia_apdb) > 0:
+        good_mask = dia_apdb["reliability"] > reliability_threshold
+        _add(dia_apdb[good_mask], symbol="o", size=14, ctype="blue", use_radec=False,
+             legend=f"APDB, reliability > {reliability_threshold:g}")
+        _add(dia_apdb[~good_mask], symbol="o", size=14, ctype="red", use_radec=False,
+             legend=f"APDB, reliability <= {reliability_threshold:g}")
 
     solar_system_labels = None
     if show_solar_system:
@@ -1194,16 +1262,60 @@ def _collect_overlays(butler, data_id, wcs, *,
         _add(_try_get("marginal_new_dia_source"),
              symbol="+", size=10, ctype="yellow", legend="marginal new diaSource")
 
-    # Draw reliability score text at most once per diaSource: prefer
-    # APDB labels when APDB is being displayed, and otherwise fall back
-    # to standardized-diaSource labels (useful when the pipeline stops
-    # before APDB ingest).
-    if reliability_labels is None:
-        apdb_shown = show_apdb and dia_apdb is not None and len(dia_apdb) > 0
-        if not apdb_shown:
-            reliability_labels = standardized_labels
+    # Reliability text is drawn at most once per diaSource: prefer APDB
+    # good sources when APDB is displayed, and otherwise annotate every
+    # standardized row (they've been pipeline-filtered to high
+    # reliability already). The unfiltered catalog doesn't carry a final
+    # reliability score, so it never provides labels.
+    reliability_labels = None
+    apdb_shown = show_apdb and dia_apdb is not None and len(dia_apdb) > 0
+    if show_reliability_labels:
+        if apdb_shown:
+            rel = np.asarray(dia_apdb["reliability"])
+            mask = rel > reliability_threshold
+            if mask.any():
+                reliability_labels = {"x": np.asarray(dia_apdb["x"])[mask],
+                                      "y": np.asarray(dia_apdb["y"])[mask],
+                                      "reliability": rel[mask]}
+        elif standardized_data is not None:
+            reliability_labels = {
+                "x": standardized_data["x"],
+                "y": standardized_data["y"],
+                "reliability": np.asarray(standardized_data["catalog"]["reliability"]),
+            }
 
-    return overlays, reliability_labels, solar_system_labels
+    # Dipole and trail line segments both come from dia_source_unfiltered:
+    # it's the earliest AP-pipeline catalog and thus a superset of the
+    # downstream ones that get dipoles/long trails filtered out, and it
+    # carries the raw ip_diffim / ext_trailedSources measurement columns
+    # in native pixel + detector-radian units — exactly the coordinate
+    # system the endpoint math lives in.
+    dipole_segments = None
+    if show_dipoles:
+        # Fixed 10 px length: the measured ``ip_diffim_DipoleFit_separation``
+        # is sub-pixel for the vast majority of classified dipoles (median
+        # ~0.09 px in typical data), so drawing at the measured length
+        # would hide them. The line here is a fixed-size *marker* of the
+        # dipole's orientation, not a physical extent.
+        dipole_segments = _line_segments_from(
+            unfiltered, wcs,
+            flag_col="ip_diffim_DipoleFit_classification",
+            angle_col="ip_diffim_DipoleFit_orientation",
+            ctype="white", fixed_length=10.0, thickness=3.0)
+
+    # 3 px threshold: below this the trail measurement is dominated by
+    # noise on point-like sources. Long-trailed sources removed by
+    # filterDiaSource still show up via ``show_trailed`` as ``x`` markers.
+    trail_segments = None
+    if show_trail_geometry:
+        trail_segments = _line_segments_from(
+            unfiltered, wcs, flag_col=None,
+            length_col="ext_trailedSources_Naive_length",
+            angle_col="ext_trailedSources_Naive_angle",
+            ctype="magenta", min_length=3.0,
+            length_scale=line_length_scale)
+
+    return overlays, reliability_labels, solar_system_labels, dipole_segments, trail_segments
 
 
 def _print_overlay_legend(overlays, header, indent=""):
@@ -1213,13 +1325,29 @@ def _print_overlay_legend(overlays, header, indent=""):
         print(f"{indent}  {len(x_arr):5d}  {ctype:>8s} {symbol}  {legend}")
 
 
+def _draw_line_segments(afw_display, segments):
+    """Draw one batch of centered line segments on the active frame."""
+    if segments is None:
+        return
+    ctype = segments["ctype"]
+    size = segments["size"]
+    for x1, y1, x2, y2 in zip(segments["x1"], segments["y1"],
+                              segments["x2"], segments["y2"]):
+        afw_display.line([(float(x1), float(y1)), (float(x2), float(y2))],
+                         ctype=ctype, size=size)
+
+
 def _draw_overlays_on_current_frame(afw_display, overlays,
                                     reliability_labels, solar_system_labels,
+                                    dipole_segments=None,
+                                    trail_segments=None,
                                     label_size=3):
     """Stamp one set of overlays + optional reliability and solar-system
     designation labels onto the active frame.
 
     ``label_size`` is the text size (in pixels) used for both label sets.
+    ``dipole_segments`` and ``trail_segments`` are optional line-segment
+    dicts (see `_line_segments_from`).
     """
     # Scale the text offset with the size so larger labels still clear the
     # circle markers they annotate.
@@ -1228,6 +1356,11 @@ def _draw_overlays_on_current_frame(afw_display, overlays,
         for x_arr, y_arr, symbol, size, ctype, _ in overlays:
             for x, y in zip(x_arr, y_arr):
                 afw_display.dot(symbol, x, y, size=size, ctype=ctype)
+        # Trails first, dipoles on top: a source flagged as a dipole is
+        # the more actionable pipeline-quality issue, so it wins any
+        # pixel overlap with the trail line.
+        _draw_line_segments(afw_display, trail_segments)
+        _draw_line_segments(afw_display, dipole_segments)
         if reliability_labels is not None:
             # Offset the score text so it doesn't sit on top of the marker.
             for r, x, y in zip(reliability_labels["reliability"],
@@ -1282,6 +1415,9 @@ def display_images(butler, visit, detector, backend="firefly", *,
                    show_solar_system=True,
                    show_apdb=True,
                    show_reliability_labels=True,
+                   show_dipoles=True,
+                   show_trail_geometry=True,
+                   line_length_scale=1.0,
                    label_size=3,
                    color_by=None,
                    mask_transparency=80,
@@ -1336,6 +1472,30 @@ def display_images(butler, visit, detector, backend="firefly", *,
         kernel was actually anchored vs extrapolated.
     show_reliability_labels : `bool`, optional
         If True, annotate each good APDB diaSource with its reliability score.
+    show_dipoles : `bool`, optional
+        If True, draw a 10-px white line segment through each source in
+        ``dia_source_unfiltered`` with ``ip_diffim_DipoleFit_classification``
+        set, oriented along ``ip_diffim_DipoleFit_orientation`` (radians,
+        detector-frame). The length is fixed rather than measured because
+        ``ip_diffim_DipoleFit_separation`` is sub-pixel for the vast
+        majority of classified dipoles; the line is a fixed-size marker
+        of orientation rather than a physical extent. Sourced from the
+        unfiltered catalog rather than the standardized or APDB catalogs
+        because ``filterDiaSource`` removes dipoles before those stages.
+    show_trail_geometry : `bool`, optional
+        If True, draw a magenta line segment along
+        ``ext_trailedSources_Naive_angle`` with length
+        ``ext_trailedSources_Naive_length`` for every source in
+        ``dia_source_unfiltered`` whose trail length exceeds 3 px.
+        Long-trailed sources removed by ``filterDiaSource`` still show
+        up separately under ``show_trailed`` as ``x`` markers.
+    line_length_scale : `float`, optional
+        Multiplicative factor applied to the drawn length of the trail
+        line segments *after* the 3 px trail filter, so a below-threshold
+        trail stays hidden regardless of the scale. Does not affect the
+        dipole marker, which is drawn at a fixed 10 px length by design.
+        Default 1.0 (draw trails at their measured length); use larger
+        values to make short trails easier to see against the image.
     label_size : `int`, optional
         Text size (in pixels) for the reliability score and solar-system
         designation annotations.
@@ -1378,7 +1538,8 @@ def display_images(butler, visit, detector, backend="firefly", *,
         _strip_ds9_metadata(science, diffim, template)
     images = {"science": science, "template": template, "difference": diffim}
 
-    overlays, reliability_labels, solar_system_labels = _collect_overlays(
+    (overlays, reliability_labels, solar_system_labels,
+     dipole_segments, trail_segments) = _collect_overlays(
         butler, data_id, diffim.wcs,
         reliability_threshold=reliability_threshold,
         show_unfiltered=show_unfiltered,
@@ -1389,6 +1550,9 @@ def display_images(butler, visit, detector, backend="firefly", *,
         show_solar_system=show_solar_system,
         show_apdb=show_apdb,
         show_reliability_labels=show_reliability_labels,
+        show_dipoles=show_dipoles,
+        show_trail_geometry=show_trail_geometry,
+        line_length_scale=line_length_scale,
         color_by=color_by,
     )
     _print_overlay_legend(
@@ -1406,6 +1570,8 @@ def display_images(butler, visit, detector, backend="firefly", *,
         afw_display.image(image, title=image_name)
         _draw_overlays_on_current_frame(
             afw_display, overlays, reliability_labels, solar_system_labels,
+            dipole_segments=dipole_segments,
+            trail_segments=trail_segments,
             label_size=label_size)
         if skymap is not None:
             draw_skymap_outlines_afw(afw_display, skymap, image.wcs, image.getBBox(),
@@ -1431,6 +1597,9 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
                       show_solar_system=True,
                       show_apdb=True,
                       show_reliability_labels=True,
+                      show_dipoles=True,
+                      show_trail_geometry=True,
+                      line_length_scale=1.0,
                       label_size=3,
                       color_by=None,
                       mask_transparency=80,
@@ -1461,8 +1630,9 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
         afw display backend (typically "firefly" or "ds9").
     reliability_threshold, show_unfiltered, show_trailed, show_rejected,
     show_standardized, show_marginal, show_kernel_sources,
-    show_solar_system, show_apdb, show_reliability_labels, label_size,
-    color_by, mask_transparency, strip_metadata, skymap, skymap_ctype,
+    show_solar_system, show_apdb, show_reliability_labels, show_dipoles,
+    show_trail_geometry, line_length_scale, label_size, color_by,
+    mask_transparency, strip_metadata, skymap, skymap_ctype,
     skymap_label_size, image_datasets
         Same meaning as in `display_images`. Applied to both frames; the
         tract/patch overlay uses each frame's own exposure WCS.
@@ -1494,10 +1664,15 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
         show_kernel_sources=show_kernel_sources,
         show_solar_system=show_solar_system,
         show_apdb=show_apdb, show_reliability_labels=show_reliability_labels,
+        show_dipoles=show_dipoles,
+        show_trail_geometry=show_trail_geometry,
+        line_length_scale=line_length_scale,
         color_by=color_by,
     )
-    overlays_a, rel_a, ss_a = _collect_overlays(butler_a, data_id, image_a.wcs, **common)
-    overlays_b, rel_b, ss_b = _collect_overlays(butler_b, data_id, image_b.wcs, **common)
+    overlays_a, rel_a, ss_a, dip_a, tr_a = _collect_overlays(
+        butler_a, data_id, image_a.wcs, **common)
+    overlays_b, rel_b, ss_b, dip_b, tr_b = _collect_overlays(
+        butler_b, data_id, image_b.wcs, **common)
 
     label_a, label_b = labels
     print(f"visit={visit}, detector={detector}: A/B comparison of {image_type!r}")
@@ -1507,15 +1682,17 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
     afw_display = lsst.afw.display.Display(backend=backend)
     if mask_transparency is not None:
         afw_display.setMaskTransparency(mask_transparency)
-    for frame, (tag, image, overlays, rel, ss) in enumerate((
-            (label_a, image_a, overlays_a, rel_a, ss_a),
-            (label_b, image_b, overlays_b, rel_b, ss_b))):
+    for frame, (tag, image, overlays, rel, ss, dip, tr) in enumerate((
+            (label_a, image_a, overlays_a, rel_a, ss_a, dip_a, tr_a),
+            (label_b, image_b, overlays_b, rel_b, ss_b, dip_b, tr_b))):
         afw_display.frame = frame
         # Wipe any markers left over from a previous call — `image()`
         # only replaces the pixel data, region overlays persist otherwise.
         _erase_current_frame_regions(afw_display)
         afw_display.image(image, title=f"{image_type} ({tag})")
         _draw_overlays_on_current_frame(afw_display, overlays, rel, ss,
+                                        dipole_segments=dip,
+                                        trail_segments=tr,
                                         label_size=label_size)
         if skymap is not None:
             draw_skymap_outlines_afw(afw_display, skymap, image.wcs, image.getBBox(),
