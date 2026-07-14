@@ -1254,6 +1254,23 @@ def _strip_ds9_metadata(*exposures):
                 md.remove(k)
 
 
+def _erase_current_frame_regions(afw_display):
+    """Clear all region markers on the currently-selected frame.
+
+    The firefly backend caches ``_regionLayerId`` on its impl and only
+    refreshes it inside ``_flush()``. Calling ``erase()`` right after
+    switching frames therefore issues ``delete_region_layer`` with the
+    *previous* frame's layer id under the current frame's plot id, so
+    nothing gets removed. Refreshing the cached id from the current
+    frame before erasing fixes it. Backends that don't cache a layer
+    id (e.g. ds9) fall through to a plain ``erase()``.
+    """
+    impl = getattr(afw_display, "_impl", None)
+    if impl is not None and hasattr(impl, "_getRegionLayerId"):
+        impl._regionLayerId = impl._getRegionLayerId()
+    afw_display.erase()
+
+
 def display_images(butler, visit, detector, backend="firefly", *,
                    reliability_threshold=0.1,
                    show_unfiltered=True,
@@ -1382,6 +1399,9 @@ def display_images(butler, visit, detector, backend="firefly", *,
         afw_display.setMaskTransparency(mask_transparency)
     for frame, image_name in enumerate(("science", "template", "difference")):
         afw_display.frame = frame
+        # Wipe any markers left over from a previous call — `image()`
+        # only replaces the pixel data, region overlays persist otherwise.
+        _erase_current_frame_regions(afw_display)
         image = images[image_name]
         afw_display.image(image, title=image_name)
         _draw_overlays_on_current_frame(
@@ -1491,6 +1511,9 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
             (label_a, image_a, overlays_a, rel_a, ss_a),
             (label_b, image_b, overlays_b, rel_b, ss_b))):
         afw_display.frame = frame
+        # Wipe any markers left over from a previous call — `image()`
+        # only replaces the pixel data, region overlays persist otherwise.
+        _erase_current_frame_regions(afw_display)
         afw_display.image(image, title=f"{image_type} ({tag})")
         _draw_overlays_on_current_frame(afw_display, overlays, rel, ss,
                                         label_size=label_size)
