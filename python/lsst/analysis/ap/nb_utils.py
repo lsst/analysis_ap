@@ -60,6 +60,23 @@ _IMAGE_DATASETS = {
 }
 
 
+def _apply_fakes_prefix(image_datasets, use_fakes):
+    """Prepend the fake-source pipeline's prefixes to the science and
+    template image dataset names when ``use_fakes`` is True: ``fakes_``
+    for the science image, ``injectedTemplate_`` for the template. The
+    difference image and all catalogs keep their non-prefixed names
+    (the fake-source pipeline injects into science + template but
+    re-uses the same downstream artifacts).
+    """
+    if not use_fakes:
+        return image_datasets
+    return {
+        "science": f"fakes_{image_datasets['science']}",
+        "template": f"injectedTemplate_{image_datasets['template']}",
+        "difference": image_datasets["difference"],
+    }
+
+
 def _cutout_exists(cpath, dia_source_id):
     """Return True if a cutout PNG for this diaSourceId already exists.
 
@@ -1427,7 +1444,8 @@ def display_images(butler, visit, detector, backend="firefly", *,
                    skymap=None,
                    skymap_ctype="green",
                    skymap_label_size=1.5,
-                   image_datasets=_IMAGE_DATASETS):
+                   image_datasets=_IMAGE_DATASETS,
+                   use_fakes=False):
     """Display the science, template, and difference images for a given
     visit+detector with diagnostic catalog markers overlaid.
 
@@ -1529,8 +1547,16 @@ def display_images(butler, visit, detector, backend="firefly", *,
         Mapping from image-type key (``"science"``, ``"template"``,
         ``"difference"``) to butler dataset name. Override to point at
         alternate dataset types.
+    use_fakes : `bool`, optional
+        If True, load the fake-source-injected versions of the science
+        and template images: ``fakes_`` prefix on the science dataset
+        and ``injectedTemplate_`` prefix on the template dataset. The
+        difference image and every catalog keep their non-prefixed
+        names, per the fake-source pipeline's output convention.
+        Default False.
     """
     data_id = {"visit": visit, "detector": detector}
+    image_datasets = _apply_fakes_prefix(image_datasets, use_fakes)
 
     diffim = butler.get(image_datasets["difference"], data_id)
     science = butler.get(image_datasets["science"], data_id)
@@ -1609,7 +1635,8 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
                       skymap=None,
                       skymap_ctype="green",
                       skymap_label_size=1.5,
-                      image_datasets=_IMAGE_DATASETS):
+                      image_datasets=_IMAGE_DATASETS,
+                      use_fakes=False):
     """Display one image type side-by-side from two butlers, with overlays.
 
     Loads the same (visit, detector) from ``butler_a`` and ``butler_b``,
@@ -1635,13 +1662,14 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
     show_solar_system, show_apdb, show_reliability_labels, show_dipoles,
     show_trail_geometry, line_length_scale, label_size, color_by,
     mask_transparency, strip_metadata, skymap, skymap_ctype,
-    skymap_label_size, image_datasets
+    skymap_label_size, image_datasets, use_fakes
         Same meaning as in `display_images`. Applied to both frames; the
         tract/patch overlay uses each frame's own exposure WCS.
     """
     if image_type not in image_datasets:
         raise ValueError(
             f"image_type must be one of {sorted(image_datasets)}, got {image_type!r}")
+    image_datasets = _apply_fakes_prefix(image_datasets, use_fakes)
     dataset = image_datasets[image_type]
     data_id = {"visit": visit, "detector": detector}
 
@@ -1809,6 +1837,7 @@ def display_footprints(butler=None, visit=None, detector=None,
                        catalog_dataset="dia_source_unfiltered",
                        style="outline",
                        palette=_OBJECT_PALETTE,
+                       frame=0,
                        mask_transparency=80,
                        strip_metadata=True,
                        image_datasets=_IMAGE_DATASETS):
@@ -1876,6 +1905,8 @@ def display_footprints(butler=None, visit=None, detector=None,
     palette : sequence of `str`, optional
         Colors cycled across footprints. Defaults to the 12-color
         ``_OBJECT_PALETTE`` also used by the cutout plotters.
+    frame : `int`, optional
+        Display frame to draw the image and footprints in. Default ``0``.
     mask_transparency : `int` or `None`, optional
         Mask-plane transparency forwarded to the display (0 = opaque,
         100 = fully transparent). Pass ``None`` to leave it untouched.
@@ -1941,7 +1972,7 @@ def display_footprints(butler=None, visit=None, detector=None,
     afw_display = lsst.afw.display.Display(backend=backend)
     if mask_transparency is not None:
         afw_display.setMaskTransparency(mask_transparency)
-    afw_display.frame = 0
+    afw_display.frame = frame
     # image() only replaces pixel data; wipe stale region markers first.
     _erase_current_frame_regions(afw_display)
     afw_display.image(exposure, title=title)
