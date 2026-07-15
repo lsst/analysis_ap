@@ -26,7 +26,7 @@ __all__ = ["make_simbad_link", "compare_sources", "compare_objects",
            "classify_association_clusters",
            "plot_cutouts_with_object_markers",
            "plot_objects_sharing_sources",
-           "display_images", "display_images_ab",
+           "display_images", "display_images_ab", "display_footprints",
            "get_xy_from_source_table", "extract_timestamped_messages"]
 
 import astropy.coordinates as coord
@@ -38,10 +38,12 @@ import functools
 import json
 import numpy as np
 import os
+import random
 import pandas as pd
 from typing import Any
 
 import lsst.afw.display
+import lsst.afw.table
 from lsst.daf.butler import DatasetNotFoundError
 from lsst.analysis.ap import plotImageSubtractionCutouts
 from lsst.analysis.ap.compare import match_catalogs
@@ -1702,6 +1704,259 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
         afw_display.alignImages(match_type="Pixel")
     except NotImplementedError:
         print(f"WARNING: cannot automatically align and lock images with backend={backend!r}.")
+
+
+def _subset_catalog(catalog, indices):
+    """Build a `~lsst.afw.table.SourceCatalog` of the rows at `indices`.
+
+    The subset shares the input's table and appends the existing records
+    (shallow), so each row keeps its attached `Footprint` rather than a
+    copy. Used to split a catalog into one sub-catalog per overlay color.
+    """
+    subset = lsst.afw.table.SourceCatalog(catalog.table)
+    for i in indices:
+        subset.append(catalog[i])
+    return subset
+
+
+def _footprint_adjacency(bboxes):
+    """Adjacency lists for footprints whose bounding boxes overlap.
+
+    Two footprints are adjacent when their bounding boxes overlap (share
+    at least one pixel). Bounding-box overlap can slightly over-count
+    versus true pixel touching, which only makes the coloring more
+    conservative (never assigns the same color to two touching footprints).
+
+    Parameters
+    ----------
+    bboxes : `list` [`lsst.geom.Box2I`]
+        Footprint bounding boxes, in the order the catalog iterates.
+
+    Returns
+    -------
+    adjacency : `list` [`set` [`int`]]
+        ``adjacency[i]`` is the set of indices whose footprints touch
+        footprint ``i``.
+    """
+    n = len(bboxes)
+    adjacency = [set() for _ in range(n)]
+    for i in range(n):
+        for j in range(i + 1, n):
+            if bboxes[i].overlaps(bboxes[j]):
+                adjacency[i].add(j)
+                adjacency[j].add(i)
+    return adjacency
+
+
+def _greedy_color(adjacency, n_colors, rng=None):
+    """Greedily color a graph so touching nodes differ, using `n_colors`.
+
+    Nodes are colored highest-degree first (Welsh--Powell), and each node
+    takes a color chosen *at random* from those not already used by an
+    adjacent node. Randomizing the choice -- rather than always taking the
+    lowest free index -- spreads the coloring across the whole palette and
+    varies it between runs, while still guaranteeing adjacent footprints
+    differ. Footprint adjacency graphs are essentially planar, so with 12
+    colors available a conflict-free coloring is found in practice. In the
+    pathological case where a node's neighbors already occupy all
+    `n_colors`, it falls back to a color least used among those neighbors
+    (ties broken randomly) rather than failing.
+
+    Parameters
+    ----------
+    adjacency : `list` [`set` [`int`]]
+        Adjacency lists from `_footprint_adjacency`.
+    n_colors : `int`
+        Number of available colors (palette length).
+    rng : `random.Random`, optional
+        Random source, for reproducible colorings in tests. Defaults to a
+        fresh unseeded `random.Random`.
+
+    Returns
+    -------
+    colors : `list` [`int`]
+        ``colors[i]`` is the palette index assigned to node ``i``.
+    """
+    if rng is None:
+        rng = random.Random()
+    n = len(adjacency)
+    colors = [-1] * n
+    order = sorted(range(n), key=lambda i: len(adjacency[i]), reverse=True)
+    for node in order:
+        used = {colors[nbr] for nbr in adjacency[node] if colors[nbr] >= 0}
+        available = [c for c in range(n_colors) if c not in used]
+        if available:
+            chosen = rng.choice(available)
+        else:
+            # Every color is taken by a neighbor (needs >n_colors mutually
+            # touching footprints -- essentially never). Reuse a color that
+            # appears least among the neighbors, breaking ties randomly.
+            counts = [0] * n_colors
+            for nbr in adjacency[node]:
+                if colors[nbr] >= 0:
+                    counts[colors[nbr]] += 1
+            fewest = min(counts)
+            chosen = rng.choice(
+                [c for c in range(n_colors) if counts[c] == fewest])
+        colors[node] = chosen
+    return colors
+
+
+def display_footprints(butler=None, visit=None, detector=None,
+                       backend="firefly", *,
+                       exposure=None, catalog=None,
+                       image_type="difference",
+                       catalog_dataset="dia_source_unfiltered",
+                       style="outline",
+                       palette=_OBJECT_PALETTE,
+                       mask_transparency=80,
+                       strip_metadata=True,
+                       image_datasets=_IMAGE_DATASETS):
+    """Overlay diaSource footprints on an exposure in Firefly, color-cycled
+    so that touching footprints get distinct colors.
+
+    The footprints come from an afw `~lsst.afw.table.SourceCatalog` (the
+    diffim detection output, which still carries per-source `Footprint`\\ s
+    -- the transformed and APDB diaSource tables are DataFrames with the
+    footprints stripped). Supply the data one of two ways:
+
+      * pass ``butler`` plus ``visit`` and ``detector`` to load the
+        exposure (``image_datasets[image_type]``) and catalog
+        (``catalog_dataset``) from the butler; or
+      * pass ``exposure`` and ``catalog`` directly, skipping the butler.
+
+    The footprints are then drawn on a single Firefly frame using the
+    backend's native footprint overlay.
+
+    Each footprint is assigned one of the `palette` colors by greedy
+    graph coloring over a bounding-box-touch adjacency graph, so no two
+    touching footprints share a color (see `_footprint_adjacency` and
+    `_greedy_color`). The color chosen for each footprint is randomized
+    among those its neighbors are not using, so the palette is spread
+    across the frame and re-running produces a different coloring. Because
+    Firefly's ``overlayFootprints`` takes a single color per call, the
+    catalog is split into one sub-catalog per color and each is overlaid as
+    its own Firefly layer.
+
+    Re-running on the same frame overwrites each color layer in place.
+    Color layers left over from a previous run that used *more* colors are
+    not cleared automatically.
+
+    Parameters
+    ----------
+    butler : `lsst.daf.butler.Butler`, optional
+        Butler to load the exposure and catalog from. Required (with
+        ``visit`` and ``detector``) unless ``exposure`` and ``catalog`` are
+        given directly.
+    visit, detector : `int`, optional
+        Visit and detector ids to load data for. Required with ``butler``.
+    backend : `str`, optional
+        afw display backend. Only ``"firefly"`` is supported, since the
+        overlay uses Firefly's native footprint rendering.
+    exposure : `lsst.afw.image.Exposure`, optional
+        Exposure to draw on, supplied directly instead of via the butler.
+        Must be given together with ``catalog``; when set, ``butler``,
+        ``visit``, ``detector``, ``catalog_dataset``, ``image_type``, and
+        ``image_datasets`` are all ignored.
+    catalog : `lsst.afw.table.SourceCatalog`, optional
+        Footprint-bearing source catalog, supplied directly instead of via
+        the butler. Must be given together with ``exposure``.
+    image_type : {"science", "template", "difference"}, optional
+        Which image to display the footprints on (butler mode only).
+        Default ``"difference"``.
+    catalog_dataset : `str`, optional
+        Butler dataset of the footprint-bearing afw source catalog (butler
+        mode only). Default ``"dia_source_unfiltered"`` (the pre-filter
+        detection catalog, which still carries footprints; the
+        transformed/standardized diaSource tables have them stripped).
+    style : {"outline", "fill"}, optional
+        Footprint rendering style. ``"outline"`` (default) keeps the
+        color coding legible where footprints overlap; ``"fill"`` shades
+        the interior.
+    palette : sequence of `str`, optional
+        Colors cycled across footprints. Defaults to the 12-color
+        ``_OBJECT_PALETTE`` also used by the cutout plotters.
+    mask_transparency : `int` or `None`, optional
+        Mask-plane transparency forwarded to the display (0 = opaque,
+        100 = fully transparent). Pass ``None`` to leave it untouched.
+    strip_metadata : `bool`, optional
+        Drop ``LTV1``/``LTV2`` keywords from the exposure metadata before
+        sending to the backend.
+    image_datasets : `dict` [`str`, `str`], optional
+        Mapping from image-type key to butler dataset name.
+    """
+    if backend != "firefly":
+        raise ValueError(
+            f"display_footprints only supports the 'firefly' backend "
+            f"(needs Firefly's native footprint overlay); got {backend!r}")
+    if style not in ("outline", "fill"):
+        raise ValueError(f"style must be 'outline' or 'fill', got {style!r}")
+
+    # Two input modes: direct (exposure + catalog) or butler-loaded.
+    direct = exposure is not None or catalog is not None
+    if direct:
+        if exposure is None or catalog is None:
+            raise ValueError(
+                "supply BOTH exposure and catalog to draw directly")
+        title = "footprints"
+        location = ""
+    else:
+        if butler is None or visit is None or detector is None:
+            raise ValueError(
+                "supply either (butler, visit, detector) or "
+                "(exposure, catalog)")
+        if image_type not in image_datasets:
+            raise ValueError(
+                f"image_type must be one of {sorted(image_datasets)}, "
+                f"got {image_type!r}")
+        data_id = {"visit": visit, "detector": detector}
+        exposure = butler.get(image_datasets[image_type], data_id)
+        catalog = butler.get(catalog_dataset, data_id)
+        title = f"{image_type} footprints"
+        location = f"visit={visit}, detector={detector}: "
+
+    if strip_metadata:
+        _strip_ds9_metadata(exposure)
+    if not isinstance(catalog, lsst.afw.table.SourceCatalog):
+        raise TypeError(
+            f"catalog is a {type(catalog).__name__}, not an afw "
+            "SourceCatalog. Footprints are only carried by the afw detection "
+            "catalog (storageClass 'SourceCatalog'); the "
+            "transformed/standardized diaSource tables (DataFrame or "
+            "ArrowAstropy, e.g. 'dia_source_detector') have them stripped.")
+    if len(catalog) > 0 and catalog[0].getFootprint() is None:
+        raise ValueError(
+            "catalog is an afw SourceCatalog but its records have no "
+            "Footprint attached, so there is nothing to draw.")
+
+    # Color the footprints so touching ones differ, then group indices by
+    # assigned color for the per-color Firefly overlay calls below.
+    bboxes = [record.getFootprint().getBBox() for record in catalog]
+    color_indices = _greedy_color(_footprint_adjacency(bboxes),
+                                  len(palette))
+    groups = {}
+    for i, c in enumerate(color_indices):
+        groups.setdefault(c, []).append(i)
+
+    afw_display = lsst.afw.display.Display(backend=backend)
+    if mask_transparency is not None:
+        afw_display.setMaskTransparency(mask_transparency)
+    afw_display.frame = 0
+    # image() only replaces pixel data; wipe stale region markers first.
+    _erase_current_frame_regions(afw_display)
+    afw_display.image(exposure, title=title)
+
+    print(f"{location}{len(catalog)} footprints in {len(groups)} colors")
+    # overlayFootprints is a Firefly-impl method reached via Display's
+    # attribute delegation, the same way display_images calls alignImages.
+    for c in sorted(groups):
+        indices = groups[c]
+        color = palette[c]
+        subset = _subset_catalog(catalog, indices)
+        afw_display.overlayFootprints(
+            subset, color=color, style=style,
+            layerString=f"footprints c{c} ",
+            titleString=f"footprints c{c} ")
 
 
 def extract_timestamped_messages(log: str | dict[str, Any]) -> str:
