@@ -33,6 +33,7 @@ import astropy.coordinates as coord
 from astroquery.simbad import Simbad
 import astropy.units as u
 import astropy.table
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import functools
 import json
@@ -1149,6 +1150,26 @@ def _line_segments_from(source_table, wcs, *, flag_col, angle_col, ctype,
             "ctype": ctype, "size": thickness}
 
 
+@dataclass
+class _OverlayData:
+    """Everything `display_images` / `display_images_ab` draw on one frame.
+
+    ``unfiltered_footprints`` is populated only when the caller asked for
+    footprint-style rendering of the unfiltered catalog (see
+    ``unfiltered_as_footprints`` in `_collect_overlays`); it holds
+    ``(catalog, color, label)`` buckets ready for `_overlay_footprint_layers`,
+    and in that case the unfiltered ``+`` marker is omitted from
+    ``overlays``. Otherwise it is ``None`` and the unfiltered catalog is a
+    normal marker entry in ``overlays``.
+    """
+    overlays: list = field(default_factory=list)
+    reliability_labels: dict | None = None
+    solar_system_labels: dict | None = None
+    dipole_segments: dict | None = None
+    trail_segments: dict | None = None
+    unfiltered_footprints: list | None = None
+
+
 def _collect_overlays(butler, data_id, wcs, *,
                       reliability_threshold,
                       show_unfiltered, show_trailed,
@@ -1156,28 +1177,30 @@ def _collect_overlays(butler, data_id, wcs, *,
                       show_kernel_sources, show_solar_system, show_apdb,
                       show_reliability_labels, show_dipoles,
                       show_trail_geometry, line_length_scale,
-                      color_by):
+                      color_by, unfiltered_as_footprints=False):
     """Load catalogs from one butler and build the overlay record list.
 
     Shared between `display_images` and `display_images_ab`. Catalogs that
     aren't present for this dataId are silently skipped.
 
+    When ``unfiltered_as_footprints`` is True the ``dia_source_unfiltered``
+    catalog is *not* added to ``overlays`` as ``+`` markers; instead its
+    non-sky rows are returned as `_OverlayData.unfiltered_footprints`
+    ``(catalog, color, label)`` buckets for `_overlay_footprint_layers` to
+    draw as Firefly footprint layers. With ``color_by`` the buckets are the
+    flag partition (`_group_sources_by_flag`); otherwise a single red
+    bucket. The dipole/trail line segments still come from the same
+    unfiltered catalog either way.
+
     Returns
     -------
-    overlays : list of ``(x_arr, y_arr, symbol, size, ctype, legend)`` tuples.
-    reliability_labels : dict or None
-        ``{"x", "y", "reliability"}`` arrays for the diaSources whose
-        reliability score should be drawn as text.
-    solar_system_labels : dict or None
-        ``{"x", "y", "designation"}`` arrays for matched solar-system
-        sources, suitable for drawing the designation as text next to each
-        marker.
-    dipole_segments, trail_segments : dict or None
-        Each ``{"x1", "y1", "x2", "y2", "ctype"}`` arrays describing line
-        segments through diaSource centroids to visualize dipole
-        (``isDipole`` / ``dipoleLength`` / ``dipoleAngle``) and trail
-        (``trailLength`` / ``trailAngle``) geometry from the standardized
-        or APDB catalog.
+    data : `_OverlayData`
+        ``overlays`` is a list of ``(x_arr, y_arr, symbol, size, ctype,
+        legend)`` marker tuples; ``reliability_labels`` /
+        ``solar_system_labels`` are ``{"x", "y", ...}`` dicts (or None) for
+        text annotations; ``dipole_segments`` / ``trail_segments`` are
+        line-segment dicts (or None); ``unfiltered_footprints`` is the
+        footprint-bucket list described above (or None).
     """
     def _try_get(dataset):
         try:
@@ -1213,9 +1236,22 @@ def _collect_overlays(butler, data_id, wcs, *,
     if show_unfiltered or show_dipoles or show_trail_geometry:
         unfiltered = _try_get("dia_source_unfiltered")
 
+    unfiltered_footprints = None
     if show_unfiltered and unfiltered is not None and len(unfiltered) > 0:
         non_sky = unfiltered[~unfiltered["sky_source"]]
-        if color_by:
+        if unfiltered_as_footprints:
+            # Draw as footprints instead of markers: build one
+            # (catalog, color, label) bucket per color for
+            # `_overlay_footprint_layers`. color_by splits by flag
+            # (deterministic); otherwise a single red bucket.
+            if color_by:
+                unfiltered_footprints = [
+                    (sub, ctype, f"unfiltered: {flag}")
+                    for sub, ctype, flag
+                    in _group_sources_by_flag(non_sky, color_by)]
+            else:
+                unfiltered_footprints = [(non_sky, "red", "unfiltered candidate")]
+        elif color_by:
             for sub, ctype, flag in _group_sources_by_flag(non_sky, color_by):
                 _add(sub, symbol="+", size=10, ctype=ctype,
                      legend=f"unfiltered: {flag}")
@@ -1334,7 +1370,14 @@ def _collect_overlays(butler, data_id, wcs, *,
             ctype="magenta", min_length=3.0,
             length_scale=line_length_scale)
 
-    return overlays, reliability_labels, solar_system_labels, dipole_segments, trail_segments
+    return _OverlayData(
+        overlays=overlays,
+        reliability_labels=reliability_labels,
+        solar_system_labels=solar_system_labels,
+        dipole_segments=dipole_segments,
+        trail_segments=trail_segments,
+        unfiltered_footprints=unfiltered_footprints,
+    )
 
 
 def _print_overlay_legend(overlays, header, indent=""):
@@ -1342,6 +1385,46 @@ def _print_overlay_legend(overlays, header, indent=""):
     print(f"{indent}{header}")
     for x_arr, _, symbol, _, ctype, legend in overlays:
         print(f"{indent}  {len(x_arr):5d}  {ctype:>8s} {symbol}  {legend}")
+
+
+def _print_footprint_legend(buckets, indent=""):
+    """Print a one-line-per-color summary of the unfiltered footprint layers.
+
+    ``buckets`` is the `_OverlayData.unfiltered_footprints` list of
+    ``(catalog, color, label)`` triples; does nothing when it is empty or
+    None (i.e. the unfiltered catalog was drawn as markers).
+    """
+    if not buckets:
+        return
+    total = sum(len(cat) for cat, _, _ in buckets)
+    print(f"{indent}{total:5d}  footprints  unfiltered ({len(buckets)} colors):")
+    for cat, color, label in buckets:
+        print(f"{indent}  {len(cat):5d}  {color:>11s}  {label}")
+
+
+def _resolve_unfiltered_footprints(unfiltered_style, backend, color_by):
+    """Decide whether to draw the unfiltered catalog as footprints, warning
+    about the caveats.
+
+    Footprints need Firefly's native overlay, so a non-firefly backend
+    falls back to ``+`` markers. When footprints are combined with
+    ``color_by``, stale layers from a previous call are not auto-erased
+    (Firefly exposes no API to delete or enumerate footprint layers), so
+    warn that clearing them before re-running is the caller's
+    responsibility.
+    """
+    if unfiltered_style not in ("footprint", "marker"):
+        raise ValueError("unfiltered_style must be 'footprint' or 'marker', "
+                         f"got {unfiltered_style!r}")
+    use_footprints = unfiltered_style == "footprint" and backend == "firefly"
+    if unfiltered_style == "footprint" and backend != "firefly":
+        print(f"WARNING: unfiltered_style='footprint' needs the 'firefly' "
+              f"backend; falling back to '+' markers for backend={backend!r}.")
+    if use_footprints and color_by:
+        print("WARNING: color_by footprint layers are not auto-erased; "
+              "re-running may leave stale footprints from a previous call. "
+              "Clear the frame's footprint layers before re-running.")
+    return use_footprints
 
 
 def _draw_line_segments(afw_display, segments):
@@ -1439,6 +1522,7 @@ def display_images(butler, visit, detector, backend="firefly", *,
                    line_length_scale=1.0,
                    label_size=3,
                    color_by=None,
+                   unfiltered_style="footprint",
                    mask_transparency=80,
                    strip_metadata=True,
                    skymap=None,
@@ -1462,7 +1546,7 @@ def display_images(butler, visit, detector, backend="firefly", *,
     catalog                       symbol   size  color
     ============================  =======  ====  ===========================
     psf-matching kernel sources   ``o``    12    green
-    unfiltered candidates         ``+``    10    red
+    unfiltered candidates         footprint  --  red (see ``unfiltered_style``)
     rejected diaSources           ``+``    10    orange
     long-trailed sources          ``x``    30    magenta
     standardized diaSources       ``+``    10    blue
@@ -1471,6 +1555,9 @@ def display_images(butler, visit, detector, backend="firefly", *,
     solar-system matches          ``o``    16    cyan
     marginal new diaSources       ``+``    10    yellow
     ============================  =======  ====  ===========================
+
+    By default the ``dia_source_unfiltered`` catalog is drawn as Firefly
+    footprint outlines rather than ``+`` markers; see ``unfiltered_style``.
 
     Parameters
     ----------
@@ -1524,11 +1611,27 @@ def display_images(butler, visit, detector, backend="firefly", *,
         the unfiltered-candidate overlay is split into buckets colored by
         which named flag fires first (list order = color *and* priority),
         with a residual white bucket for rows that match none of them.
-        Unknown column names are silently skipped. Example::
+        Unknown column names are silently skipped. Applies whether the
+        unfiltered catalog is drawn as footprints or markers. Example::
 
             color_by=["pixelFlags_bad", "pixelFlags_edge",
                       "ip_diffim_DipoleFit_classification",
                       "pixelFlags_saturated"]
+    unfiltered_style : {"footprint", "marker"}, optional
+        How to draw ``dia_source_unfiltered``. ``"footprint"`` (default)
+        overlays each source's `Footprint` outline using Firefly's native
+        footprint rendering; ``"marker"`` draws the old red ``+`` markers.
+        Footprints need the ``"firefly"`` backend, so any other backend
+        (e.g. ds9) silently falls back to markers. Two caveats with
+        footprints, both warned about at call time: (1) when combined with
+        ``color_by``, footprint layers from a previous call are *not*
+        auto-erased (Firefly offers no way to delete or enumerate them), so
+        clearing them before re-running is your responsibility; (2)
+        switching ``unfiltered_style`` from ``"footprint"`` to ``"marker"``
+        leaves the previous footprints on the frame — re-run in footprint
+        mode or reset the frame to clear them. Re-running in the default
+        (no ``color_by``) footprint mode overwrites the single layer in
+        place, so it is unaffected.
     mask_transparency : `int` or `None`, optional
         Mask-plane transparency forwarded to the display (0 = opaque,
         100 = fully transparent). Pass ``None`` to leave the backend's
@@ -1557,6 +1660,8 @@ def display_images(butler, visit, detector, backend="firefly", *,
     """
     data_id = {"visit": visit, "detector": detector}
     image_datasets = _apply_fakes_prefix(image_datasets, use_fakes)
+    use_footprints = _resolve_unfiltered_footprints(
+        unfiltered_style, backend, color_by)
 
     diffim = butler.get(image_datasets["difference"], data_id)
     science = butler.get(image_datasets["science"], data_id)
@@ -1566,8 +1671,7 @@ def display_images(butler, visit, detector, backend="firefly", *,
         _strip_ds9_metadata(science, diffim, template)
     images = {"science": science, "template": template, "difference": diffim}
 
-    (overlays, reliability_labels, solar_system_labels,
-     dipole_segments, trail_segments) = _collect_overlays(
+    data = _collect_overlays(
         butler, data_id, diffim.wcs,
         reliability_threshold=reliability_threshold,
         show_unfiltered=show_unfiltered,
@@ -1582,9 +1686,11 @@ def display_images(butler, visit, detector, backend="firefly", *,
         show_trail_geometry=show_trail_geometry,
         line_length_scale=line_length_scale,
         color_by=color_by,
+        unfiltered_as_footprints=use_footprints,
     )
     _print_overlay_legend(
-        overlays, f"visit={visit}, detector={detector} -- overlay legend:")
+        data.overlays, f"visit={visit}, detector={detector} -- overlay legend:")
+    _print_footprint_legend(data.unfiltered_footprints, indent="  ")
 
     afw_display = lsst.afw.display.Display(backend=backend)
     if mask_transparency is not None:
@@ -1597,10 +1703,17 @@ def display_images(butler, visit, detector, backend="firefly", *,
         image = images[image_name]
         afw_display.image(image, title=image_name)
         _draw_overlays_on_current_frame(
-            afw_display, overlays, reliability_labels, solar_system_labels,
-            dipole_segments=dipole_segments,
-            trail_segments=trail_segments,
+            afw_display, data.overlays, data.reliability_labels,
+            data.solar_system_labels,
+            dipole_segments=data.dipole_segments,
+            trail_segments=data.trail_segments,
             label_size=label_size)
+        if data.unfiltered_footprints:
+            # Per-frame layer prefix so the same catalog drawn on all three
+            # frames gets distinct Firefly layer ids.
+            _overlay_footprint_layers(
+                afw_display, data.unfiltered_footprints,
+                style="outline", layer_prefix=f"{image_name} unfiltered")
         if skymap is not None:
             draw_skymap_outlines_afw(afw_display, skymap, image.wcs, image.getBBox(),
                                      ctype=skymap_ctype, label_size=skymap_label_size)
@@ -1630,6 +1743,7 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
                       line_length_scale=1.0,
                       label_size=3,
                       color_by=None,
+                      unfiltered_style="footprint",
                       mask_transparency=80,
                       strip_metadata=True,
                       skymap=None,
@@ -1661,10 +1775,12 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
     show_standardized, show_marginal, show_kernel_sources,
     show_solar_system, show_apdb, show_reliability_labels, show_dipoles,
     show_trail_geometry, line_length_scale, label_size, color_by,
-    mask_transparency, strip_metadata, skymap, skymap_ctype,
-    skymap_label_size, image_datasets, use_fakes
+    unfiltered_style, mask_transparency, strip_metadata, skymap,
+    skymap_ctype, skymap_label_size, image_datasets, use_fakes
         Same meaning as in `display_images`. Applied to both frames; the
-        tract/patch overlay uses each frame's own exposure WCS.
+        tract/patch overlay uses each frame's own exposure WCS. Each frame's
+        unfiltered footprints get their own per-frame Firefly layers (keyed
+        by ``labels``), so the two frames don't share layers.
     """
     if image_type not in image_datasets:
         raise ValueError(
@@ -1685,6 +1801,8 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
     if strip_metadata:
         _strip_ds9_metadata(image_a, image_b)
 
+    use_footprints = _resolve_unfiltered_footprints(
+        unfiltered_style, backend, color_by)
     common = dict(
         reliability_threshold=reliability_threshold,
         show_unfiltered=show_unfiltered,
@@ -1698,32 +1816,41 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
         show_trail_geometry=show_trail_geometry,
         line_length_scale=line_length_scale,
         color_by=color_by,
+        unfiltered_as_footprints=use_footprints,
     )
-    overlays_a, rel_a, ss_a, dip_a, tr_a = _collect_overlays(
-        butler_a, data_id, image_a.wcs, **common)
-    overlays_b, rel_b, ss_b, dip_b, tr_b = _collect_overlays(
-        butler_b, data_id, image_b.wcs, **common)
+    data_a = _collect_overlays(butler_a, data_id, image_a.wcs, **common)
+    data_b = _collect_overlays(butler_b, data_id, image_b.wcs, **common)
 
     label_a, label_b = labels
     print(f"visit={visit}, detector={detector}: A/B comparison of {image_type!r}")
-    _print_overlay_legend(overlays_a, f"-- {label_a} overlay legend:", indent="  ")
-    _print_overlay_legend(overlays_b, f"-- {label_b} overlay legend:", indent="  ")
+    _print_overlay_legend(data_a.overlays, f"-- {label_a} overlay legend:", indent="  ")
+    _print_footprint_legend(data_a.unfiltered_footprints, indent="    ")
+    _print_overlay_legend(data_b.overlays, f"-- {label_b} overlay legend:", indent="  ")
+    _print_footprint_legend(data_b.unfiltered_footprints, indent="    ")
 
     afw_display = lsst.afw.display.Display(backend=backend)
     if mask_transparency is not None:
         afw_display.setMaskTransparency(mask_transparency)
-    for frame, (tag, image, overlays, rel, ss, dip, tr) in enumerate((
-            (label_a, image_a, overlays_a, rel_a, ss_a, dip_a, tr_a),
-            (label_b, image_b, overlays_b, rel_b, ss_b, dip_b, tr_b))):
+    for frame, (tag, image, data) in enumerate((
+            (label_a, image_a, data_a),
+            (label_b, image_b, data_b))):
         afw_display.frame = frame
         # Wipe any markers left over from a previous call — `image()`
         # only replaces the pixel data, region overlays persist otherwise.
         _erase_current_frame_regions(afw_display)
         afw_display.image(image, title=f"{image_type} ({tag})")
-        _draw_overlays_on_current_frame(afw_display, overlays, rel, ss,
-                                        dipole_segments=dip,
-                                        trail_segments=tr,
+        _draw_overlays_on_current_frame(afw_display, data.overlays,
+                                        data.reliability_labels,
+                                        data.solar_system_labels,
+                                        dipole_segments=data.dipole_segments,
+                                        trail_segments=data.trail_segments,
                                         label_size=label_size)
+        if data.unfiltered_footprints:
+            # Per-frame layer prefix (the A/B tag) so the two frames'
+            # footprints get distinct Firefly layer ids.
+            _overlay_footprint_layers(
+                afw_display, data.unfiltered_footprints,
+                style="outline", layer_prefix=f"{tag} unfiltered")
         if skymap is not None:
             draw_skymap_outlines_afw(afw_display, skymap, image.wcs, image.getBBox(),
                                      ctype=skymap_ctype, label_size=skymap_label_size)
@@ -1828,6 +1955,49 @@ def _greedy_color(adjacency, n_colors, rng=None):
                 [c for c in range(n_colors) if counts[c] == fewest])
         colors[node] = chosen
     return colors
+
+
+def _overlay_footprint_layers(afw_display, buckets, *, style, layer_prefix):
+    """Overlay footprint buckets as Firefly layers on the current frame.
+
+    Firefly's ``overlayFootprints`` takes a single color per call, so a
+    multi-color overlay is drawn as one layer per bucket. ``layer_prefix``
+    is prepended to each layer/title string so overlays drawn on different
+    frames (e.g. the three frames of `display_images`) get distinct layer
+    ids; the backend appends the frame number itself. The per-bucket suffix
+    is the bucket's position in ``buckets``, so re-running with the same
+    number of buckets overwrites the layers in place. ``overlayFootprints``
+    is a Firefly-impl method reached via `Display`'s attribute delegation,
+    the same way `display_images` calls ``alignImages``.
+
+    Parameters
+    ----------
+    afw_display : `lsst.afw.display.Display`
+        Display with the target frame already selected.
+    buckets : `list` [`tuple`]
+        ``(catalog, color, label)`` triples; each ``catalog`` is a
+        footprint-bearing `~lsst.afw.table.SourceCatalog` drawn in
+        ``color``. Empty buckets are skipped.
+    style : {"outline", "fill"}
+        Footprint rendering style.
+    layer_prefix : `str`
+        Prefix for the Firefly layer/title strings; must be unique per
+        frame to avoid layers on different frames colliding.
+
+    Returns
+    -------
+    summary : `list` [`tuple`]
+        ``(label, color, count)`` per drawn bucket, for the legend.
+    """
+    summary = []
+    for i, (catalog, color, label) in enumerate(buckets):
+        if catalog is None or len(catalog) == 0:
+            continue
+        layer = f"{layer_prefix} c{i} "
+        afw_display.overlayFootprints(catalog, color=color, style=style,
+                                      layerString=layer, titleString=layer)
+        summary.append((label, color, len(catalog)))
+    return summary
 
 
 def display_footprints(butler=None, visit=None, detector=None,
@@ -1978,16 +2148,10 @@ def display_footprints(butler=None, visit=None, detector=None,
     afw_display.image(exposure, title=title)
 
     print(f"{location}{len(catalog)} footprints in {len(groups)} colors")
-    # overlayFootprints is a Firefly-impl method reached via Display's
-    # attribute delegation, the same way display_images calls alignImages.
-    for c in sorted(groups):
-        indices = groups[c]
-        color = palette[c]
-        subset = _subset_catalog(catalog, indices)
-        afw_display.overlayFootprints(
-            subset, color=color, style=style,
-            layerString=f"footprints c{c} ",
-            titleString=f"footprints c{c} ")
+    buckets = [(_subset_catalog(catalog, groups[c]), palette[c], f"c{c}")
+               for c in sorted(groups)]
+    _overlay_footprint_layers(afw_display, buckets, style=style,
+                              layer_prefix="footprints")
 
 
 def extract_timestamped_messages(log: str | dict[str, Any]) -> str:
