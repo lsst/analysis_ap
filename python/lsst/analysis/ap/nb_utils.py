@@ -1529,7 +1529,8 @@ def display_images(butler, visit, detector, backend="firefly", *,
                    skymap_ctype="green",
                    skymap_label_size=1.5,
                    image_datasets=_IMAGE_DATASETS,
-                   use_fakes=False):
+                   use_fakes=False,
+                   dry_run=False):
     """Display the science, template, and difference images for a given
     visit+detector with diagnostic catalog markers overlaid.
 
@@ -1657,6 +1658,12 @@ def display_images(butler, visit, detector, backend="firefly", *,
         difference image and every catalog keep their non-prefixed
         names, per the fake-source pipeline's output convention.
         Default False.
+    dry_run : `bool`, optional
+        If True, load every requested image and catalog and print the
+        overlay/footprint legends, but skip constructing the afw display
+        and drawing anything. Useful for sanity-checking which datasets
+        are available for a (visit, detector) without opening a viewer.
+        Default False.
     """
     data_id = {"visit": visit, "detector": detector}
     image_datasets = _apply_fakes_prefix(image_datasets, use_fakes)
@@ -1691,6 +1698,9 @@ def display_images(butler, visit, detector, backend="firefly", *,
     _print_overlay_legend(
         data.overlays, f"visit={visit}, detector={detector} -- overlay legend:")
     _print_footprint_legend(data.unfiltered_footprints, indent="  ")
+
+    if dry_run:
+        return
 
     afw_display = lsst.afw.display.Display(backend=backend)
     if mask_transparency is not None:
@@ -1750,7 +1760,8 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
                       skymap_ctype="green",
                       skymap_label_size=1.5,
                       image_datasets=_IMAGE_DATASETS,
-                      use_fakes=False):
+                      use_fakes=False,
+                      dry_run=False):
     """Display one image type side-by-side from two butlers, with overlays.
 
     Loads the same (visit, detector) from ``butler_a`` and ``butler_b``,
@@ -1776,7 +1787,7 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
     show_solar_system, show_apdb, show_reliability_labels, show_dipoles,
     show_trail_geometry, line_length_scale, label_size, color_by,
     unfiltered_style, mask_transparency, strip_metadata, skymap,
-    skymap_ctype, skymap_label_size, image_datasets, use_fakes
+    skymap_ctype, skymap_label_size, image_datasets, use_fakes, dry_run
         Same meaning as in `display_images`. Applied to both frames; the
         tract/patch overlay uses each frame's own exposure WCS. Each frame's
         unfiltered footprints get their own per-frame Firefly layers (keyed
@@ -1827,6 +1838,9 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
     _print_footprint_legend(data_a.unfiltered_footprints, indent="    ")
     _print_overlay_legend(data_b.overlays, f"-- {label_b} overlay legend:", indent="  ")
     _print_footprint_legend(data_b.unfiltered_footprints, indent="    ")
+
+    if dry_run:
+        return
 
     afw_display = lsst.afw.display.Display(backend=backend)
     if mask_transparency is not None:
