@@ -27,6 +27,7 @@ __all__ = ["make_simbad_link", "compare_sources", "compare_objects",
            "plot_cutouts_with_object_markers",
            "plot_objects_sharing_sources",
            "display_images", "display_images_ab", "display_footprints",
+           "display_coadd_coverage",
            "get_xy_from_source_table", "extract_timestamped_messages"]
 
 import astropy.coordinates as coord
@@ -45,10 +46,14 @@ from typing import Any
 
 import lsst.afw.display
 import lsst.afw.table
+import lsst.geom
 from lsst.daf.butler import DatasetNotFoundError
 from lsst.analysis.ap import plotImageSubtractionCutouts
 from lsst.analysis.ap.compare import match_catalogs
 from lsst.analysis.ap.skymapOverlay import draw_skymap_outlines_afw
+# Polygon geometry shared with the skymap overlays; private to the
+# package, not to the module.
+from lsst.analysis.ap.skymapOverlay import _clip_polygon_to_rect, _polygon_area
 from IPython.display import display, Image, Markdown
 
 
@@ -1873,6 +1878,370 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
         afw_display.alignImages(match_type="Pixel")
     except NotImplementedError:
         print(f"WARNING: cannot automatically align and lock images with backend={backend!r}.")
+
+
+@dataclass
+class _PatchCoverage:
+    """One coadd patch that contributed to a template."""
+
+    tract: int
+    patch: int
+    record: Any
+    """Exposure record from the template's ``coaddInputs.ccds``."""
+    ref: Any
+    """`lsst.daf.butler.DatasetRef` of the coadd, or None if not found."""
+    corners_xy: list
+    """Patch outline projected into difference-image pixels."""
+    overlap: float
+    """Fraction of the difference image this patch covers."""
+    color: str
+    frame: int | None
+    """Display frame showing this coadd; None when the coadd is missing."""
+
+
+def _coadd_input_patches(butler, template_dataset, data_id):
+    """The coadd patches recorded as a template's inputs.
+
+    Read as a butler component, so the template's pixels are never
+    loaded.
+
+    Parameters
+    ----------
+    butler : `lsst.daf.butler.Butler`
+        Butler to load from.
+    template_dataset : `str`
+        Dataset name of the template (e.g. ``"template_detector"``).
+    data_id : `dict`
+        Data id of the template.
+
+    Returns
+    -------
+    patches : `dict` [`tuple` [`int`, `int`], `lsst.afw.table.ExposureRecord`]
+        Exposure record of each contributing patch, keyed on
+        ``(tract, patch)`` and sorted. Empty if the template carries no
+        coadd inputs.
+    """
+    coadd_inputs = butler.get(f"{template_dataset}.coaddInputs", data_id)
+    ccds = None if coadd_inputs is None else coadd_inputs.ccds
+    if ccds is None or len(ccds) == 0:
+        return {}
+    if not {"tract", "patch"} <= ccds.schema.getNames():
+        raise RuntimeError(
+            f"{template_dataset}.coaddInputs has no 'tract'/'patch' fields, so "
+            "the contributing coadds cannot be identified; this template "
+            "predates GetTemplateTask recording its input patches.")
+    patches = {}
+    for record in ccds:
+        # Patch ids repeat across tracts, so key on the pair. One record
+        # per patch is expected; keep the first if that ever changes.
+        patches.setdefault((int(record["tract"]), int(record["patch"])), record)
+    return dict(sorted(patches.items()))
+
+
+def _query_coadd_refs(butler, coadd_dataset, band, keys, skymap_name=None):
+    """Resolve one dataset ref per ``(tract, patch)`` key, where one exists.
+
+    A single constrained query both resolves the ``skymap`` dimension --
+    which a (visit, detector) data id doesn't carry -- and reports which
+    patches are absent from the butler's collections.
+
+    Parameters
+    ----------
+    butler : `lsst.daf.butler.Butler`
+        Butler to query; its default collections are used.
+    coadd_dataset : `str`
+        Dataset name of the coadds (e.g. ``"template_coadd"``).
+    band : `str`
+        Band to restrict the query to.
+    keys : `collections.abc.Container` [`tuple` [`int`, `int`]]
+        The ``(tract, patch)`` pairs to look for.
+    skymap_name : `str`, optional
+        Skymap to restrict the query to. Only needed when the coadds
+        match more than one skymap.
+
+    Returns
+    -------
+    refs : `dict` [`tuple` [`int`, `int`], `lsst.daf.butler.DatasetRef`]
+        Refs of the coadds that exist, keyed on ``(tract, patch)``.
+    """
+    where = "band = :band AND tract IN (:tracts) AND patch IN (:patches)"
+    bind = {"band": band,
+            "tracts": sorted({tract for tract, _ in keys}),
+            "patches": sorted({patch for _, patch in keys})}
+    if skymap_name is not None:
+        where += " AND skymap = :skymap"
+        bind["skymap"] = skymap_name
+
+    refs = {}
+    skymaps = set()
+    for ref in butler.query_datasets(coadd_dataset, where=where, bind=bind,
+                                     limit=None, explain=False):
+        key = (ref.dataId["tract"], ref.dataId["patch"])
+        # tract and patch are constrained independently, so the query
+        # returns their cross product; drop the pairs we didn't ask for.
+        if key not in keys:
+            continue
+        skymaps.add(ref.dataId["skymap"])
+        refs[key] = ref
+    if len(skymaps) > 1:
+        raise ValueError(f"{coadd_dataset} matched more than one skymap "
+                         f"({sorted(skymaps)}); pass skymap_name to pick one.")
+    return refs
+
+
+def _project_bbox_corners(bbox, from_wcs, to_wcs):
+    """Corners of a bounding box mapped from one pixel grid to another.
+
+    ``bbox`` is in ``from_wcs``'s pixel system; the returned ``(x, y)``
+    corners are in ``to_wcs``'s parent pixel system.
+    """
+    corners = []
+    for corner in lsst.geom.Box2D(bbox).getCorners():
+        point = to_wcs.skyToPixel(from_wcs.pixelToSky(corner))
+        corners.append((point.getX(), point.getY()))
+    return corners
+
+
+def _rect_from_bbox(bbox):
+    """``(xmin, xmax, ymin, ymax)`` clip rectangle of a bounding box.
+
+    Taken at the box's outer pixel edges (the `lsst.geom.Box2D`
+    convention) so that clipped areas are comparable with
+    ``Box2D.getArea()``; the integer ``Box2I`` limits would be a half
+    pixel short on each side.
+    """
+    box = lsst.geom.Box2D(bbox)
+    return (box.getMinX(), box.getMaxX(), box.getMinY(), box.getMaxY())
+
+
+def _draw_outline_on_current_frame(afw_display, corners, ctype, *, label=None,
+                                   label_size=1.5, clip_rect=None):
+    """Draw a closed polyline through ``corners`` on the active frame.
+
+    ``clip_rect`` is the displayed image's ``(xmin, xmax, ymin, ymax)``;
+    when supplied, the label is anchored at the centroid of the outline's
+    *visible* portion so it stays on-screen for outlines that mostly fall
+    outside the frame.
+    """
+    afw_display.line(list(corners) + [corners[0]], ctype=ctype)
+    if label is None:
+        return
+    visible = _clip_polygon_to_rect(corners, *clip_rect) if clip_rect else corners
+    if not visible:
+        visible = corners
+    x = sum(p[0] for p in visible)/len(visible)
+    y = sum(p[1] for p in visible)/len(visible)
+    afw_display.dot(label, x, y, size=label_size, ctype=ctype)
+
+
+def _subset_coadd_to_outline(coadd, corners, margin):
+    """Trim a coadd to ``margin`` pixels around a projected outline.
+
+    Returns the untrimmed coadd if the outline misses it entirely.
+    """
+    box = lsst.geom.Box2D()
+    for x, y in corners:
+        box.include(lsst.geom.Point2D(x, y))
+    box.grow(margin)
+    bbox = lsst.geom.Box2I(box)
+    bbox.clip(coadd.getBBox())
+    if bbox.isEmpty():
+        return coadd
+    return coadd[bbox]
+
+
+def _print_coadd_coverage_legend(header, coverages, indent="  "):
+    """Print one row per contributing patch: frame, id, color, coverage."""
+    print(header)
+    print(f"{indent}{'frame':>5s}  {'tract':>6s}  {'patch':>5s}  "
+          f"{'color':<8s}  {'overlap':>7s}  coadd")
+    for cov in coverages:
+        frame = "--" if cov.frame is None else str(cov.frame)
+        status = "found" if cov.ref is not None else "MISSING from collections"
+        print(f"{indent}{frame:>5s}  {cov.tract:6d}  {cov.patch:5d}  "
+              f"{cov.color:<8s}  {100*cov.overlap:6.1f}%  {status}")
+
+
+def display_coadd_coverage(butler, visit, detector, backend="firefly", *,
+                           patch_extent="full",
+                           patch_margin=100,
+                           show_diffim_outline=True,
+                           show_patch_outlines=True,
+                           diffim_ctype="red",
+                           label_size=1.5,
+                           mask_transparency=80,
+                           strip_metadata=True,
+                           align="Standard",
+                           skymap_name=None,
+                           image_datasets=_IMAGE_DATASETS,
+                           coadd_dataset="template_coadd",
+                           dry_run=False):
+    """Display a difference image alongside every coadd patch that went
+    into its template.
+
+    Frame 0 shows the difference image, with the outline of each
+    contributing patch drawn and labeled ``tract,patch``. Frames 1..N show
+    the coadd patches themselves, one per frame in ``(tract, patch)``
+    order, each with the difference image's footprint outlined on it.
+
+    The contributing patches are read from the template's ``coaddInputs``,
+    which `~lsst.ip.diffim.GetTemplateTask` fills with one record per
+    patch that supplied valid pixels. That is a stricter set than a skymap
+    lookup would give: patches that overlap the detector geometrically but
+    contributed nothing were already dropped when the template was built.
+
+    Parameters
+    ----------
+    butler : `lsst.daf.butler.Butler`
+        Butler to load data from.
+    visit, detector : `int`
+        Visit and detector ids to load data for.
+    backend : `str`, optional
+        afw display backend (typically "firefly" or "ds9").
+    patch_extent : {"full", "overlap"}, optional
+        How much of each coadd to display. ``"full"`` (default) shows the
+        whole patch, which is what puts the detector's footprint in
+        context but sends a full-size coadd to the backend per frame;
+        ``"overlap"`` trims each patch to the difference image's footprint
+        plus ``patch_margin``, which is much faster to display but makes
+        every frame look alike.
+    patch_margin : `int`, optional
+        Pixels of coadd to keep around the difference image's footprint
+        when ``patch_extent="overlap"``. Ignored for ``"full"``.
+    show_diffim_outline : `bool`, optional
+        If True, outline the difference image's footprint on each coadd
+        frame, labeled ``visit,detector``.
+    show_patch_outlines : `bool`, optional
+        If True, outline each contributing patch on the difference-image
+        frame, labeled ``tract,patch``. Outlines are drawn for missing
+        coadds too, since the geometry comes from the template's records
+        rather than from the coadd itself.
+    diffim_ctype : `str`, optional
+        Display color for the difference-image outline. The patch outlines
+        cycle through a fixed palette instead, so that a patch's color on
+        frame 0 identifies its own frame in the printed legend.
+    label_size : `float`, optional
+        Text size for the outline labels.
+    mask_transparency : `int` or `None`, optional
+        Mask-plane transparency forwarded to the display (0 = opaque,
+        100 = fully transparent). Pass ``None`` to leave the backend's
+        current setting untouched.
+    strip_metadata : `bool`, optional
+        Drop ``LTV1``/``LTV2`` keywords from each exposure's metadata
+        before sending to the backend. Needed for ds9 to align frames.
+    align : `str` or `None`, optional
+        ``match_type`` passed to ``alignImages``. Defaults to
+        ``"Standard"`` (align by WCS) rather than the pixel matching
+        `display_images` uses, because these frames do not share a pixel
+        grid. Pass None to leave the frames unaligned.
+    skymap_name : `str`, optional
+        Skymap the coadds live in. Only needed when the contributing
+        tracts and patches match coadds in more than one skymap, which is
+        an error otherwise.
+    image_datasets : `dict` [`str`, `str`], optional
+        Mapping from image-type key (``"science"``, ``"template"``,
+        ``"difference"``) to butler dataset name. Only the ``"template"``
+        and ``"difference"`` entries are used here; the template is read
+        as a ``.coaddInputs`` component, so its pixels are never loaded.
+    coadd_dataset : `str`, optional
+        Dataset name of the coadds the template was built from. The
+        default matches what ``ApPipe.yaml`` binds to the template task's
+        ``coaddExposures`` input.
+    dry_run : `bool`, optional
+        If True, work out which patches contributed and print the legend,
+        but skip constructing the afw display and loading any pixels.
+        Useful for checking a template's provenance without a viewer.
+        Default False.
+    """
+    if patch_extent not in ("full", "overlap"):
+        raise ValueError("patch_extent must be 'full' or 'overlap', "
+                         f"got {patch_extent!r}")
+    data_id = {"visit": visit, "detector": detector}
+    header = f"visit={visit}, detector={detector} -- "
+
+    patches = _coadd_input_patches(butler, image_datasets["template"], data_id)
+    if not patches:
+        print(f"{header}template records no coadd inputs; showing the "
+              "difference image only.")
+
+    diffim = butler.get(image_datasets["difference"], data_id)
+    bbox = diffim.getBBox()
+    clip_rect = _rect_from_bbox(bbox)
+    diffim_area = lsst.geom.Box2D(bbox).getArea()
+    band = diffim.filter.bandLabel
+    refs = (_query_coadd_refs(butler, coadd_dataset, band, patches, skymap_name)
+            if patches else {})
+
+    coverages = []
+    frame = 1
+    for i, ((tract, patch), record) in enumerate(patches.items()):
+        corners = _project_bbox_corners(record.getBBox(), record.getWcs(),
+                                        diffim.wcs)
+        overlap = _polygon_area(_clip_polygon_to_rect(corners, *clip_rect))
+        ref = refs.get((tract, patch))
+        coverages.append(_PatchCoverage(
+            tract=tract, patch=patch, record=record, ref=ref,
+            corners_xy=corners, overlap=overlap/diffim_area,
+            color=_FLAG_PALETTE[i % len(_FLAG_PALETTE)],
+            frame=None if ref is None else frame))
+        if ref is not None:
+            frame += 1
+
+    if coverages:
+        n_tracts = len({cov.tract for cov in coverages})
+        # Overlaps sum to more than 100%: adjacent patches share a border
+        # region by construction.
+        _print_coadd_coverage_legend(
+            f"{header}{len(coverages)} coadd patches from {n_tracts} tract(s), "
+            f"band={band}:", coverages)
+
+    if dry_run:
+        return
+
+    if strip_metadata:
+        _strip_ds9_metadata(diffim)
+    afw_display = lsst.afw.display.Display(backend=backend)
+    if mask_transparency is not None:
+        afw_display.setMaskTransparency(mask_transparency)
+
+    afw_display.frame = 0
+    # Wipe any markers left over from a previous call — `image()`
+    # only replaces the pixel data, region overlays persist otherwise.
+    _erase_current_frame_regions(afw_display)
+    afw_display.image(diffim, title="difference")
+    if show_patch_outlines:
+        with afw_display.Buffering():
+            for cov in coverages:
+                _draw_outline_on_current_frame(
+                    afw_display, cov.corners_xy, cov.color,
+                    label=f"{cov.tract},{cov.patch}", label_size=label_size,
+                    clip_rect=clip_rect)
+
+    for cov in coverages:
+        if cov.ref is None:
+            continue
+        coadd = butler.get(cov.ref)
+        # Project after loading rather than reusing the record's wcs, so
+        # the outline is tied to the pixels actually on screen.
+        corners = _project_bbox_corners(bbox, diffim.wcs, coadd.wcs)
+        if patch_extent == "overlap":
+            coadd = _subset_coadd_to_outline(coadd, corners, patch_margin)
+        if strip_metadata:
+            _strip_ds9_metadata(coadd)
+        afw_display.frame = cov.frame
+        _erase_current_frame_regions(afw_display)
+        afw_display.image(coadd, title=f"{cov.tract},{cov.patch}")
+        if show_diffim_outline:
+            _draw_outline_on_current_frame(
+                afw_display, corners, diffim_ctype,
+                label=f"{visit},{detector}", label_size=label_size,
+                clip_rect=_rect_from_bbox(coadd.getBBox()))
+
+    if align is not None:
+        try:
+            afw_display.alignImages(match_type=align)
+        except NotImplementedError:
+            print(f"WARNING: cannot automatically align and lock images with backend={backend!r}.")
 
 
 def _subset_catalog(catalog, indices):
