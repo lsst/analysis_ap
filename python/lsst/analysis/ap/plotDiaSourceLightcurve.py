@@ -292,7 +292,7 @@ class PlotDiaSourceLightcurveTask(PlotImageSubtractionCutoutsTask):
 
         if n_src:
             for band, group in sources.groupby("band"):
-                color = plotUtils.BAND_COLORS.get(band, "k")
+                color = plotUtils.band_color(band)
                 _plot_group(group, color,
                             self.config.lightcurve_marker_source,
                             f"{band} (n={len(group)})")
@@ -303,7 +303,7 @@ class PlotDiaSourceLightcurveTask(PlotImageSubtractionCutoutsTask):
             # entry (in black) for the forced marker regardless of how many
             # bands are present.
             for band, group in forced_only.groupby("band"):
-                color = plotUtils.BAND_COLORS.get(band, "k")
+                color = plotUtils.band_color(band)
                 _plot_group(group, color,
                             self.config.lightcurve_marker_forced_only,
                             "_nolegend_")

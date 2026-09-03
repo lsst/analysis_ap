@@ -36,7 +36,7 @@ Three tools live here:
 
 from __future__ import annotations
 
-__all__ = ["lightcurve", "cutout_grid", "summarize_run", "BAND_COLORS"]
+__all__ = ["lightcurve", "cutout_grid", "summarize_run", "BAND_COLORS", "band_color"]
 
 import inspect
 import io
@@ -44,16 +44,30 @@ import io
 import numpy as np
 import pandas as pd
 
-# Colors keyed by lower-case band character. Mirrors the choices in
-# legacyPlotUtils.source_magnitude_histogram (g=C2, r=C1, i=C3, z=C5, y=k).
-BAND_COLORS = {
-    "u": "C4",
-    "g": "C2",
-    "r": "C1",
-    "i": "C3",
-    "z": "C5",
-    "y": "k",
-}
+from lsst.utils.plotting import get_multiband_plot_colors
+
+# The official Rubin band colors (RTN-045 colorblind-friendly palette),
+# keyed by lower-case band character. Use `band_color` rather than
+# indexing this directly, so that unknown bands get a sensible fallback.
+BAND_COLORS = get_multiband_plot_colors()
+
+
+def band_color(band, default="k"):
+    """Return the official Rubin plotting color for a band.
+
+    Parameters
+    ----------
+    band : `str`
+        Band name, e.g. ``"g"``.
+    default : `str`, optional
+        Color to return for a band with no official color.
+
+    Returns
+    -------
+    color : `str`
+        Matplotlib color specification.
+    """
+    return BAND_COLORS.get(band, default)
 
 
 def _time_column(frame):
@@ -160,7 +174,7 @@ def lightcurve(query, dia_object_id, ax=None, exclude_flagged=False,
 
     time_col = _time_column(sources)
     for band, group in sources.groupby("band"):
-        color = BAND_COLORS.get(band, "k")
+        color = band_color(band)
         ax.errorbar(group[time_col], group["psfFlux"], yerr=group["psfFluxErr"],
                     fmt="o", color=color, label=f"{band} (n={len(group)})")
 
@@ -170,7 +184,7 @@ def lightcurve(query, dia_object_id, ax=None, exclude_flagged=False,
         # individual legend entries so the forced marker is represented
         # once (in black) regardless of how many bands are present.
         for band, group in forced.groupby("band"):
-            color = BAND_COLORS.get(band, "k")
+            color = band_color(band)
             ax.errorbar(group[forced_time_col], group["psfFlux"],
                         yerr=group["psfFluxErr"], fmt=".", ms=4, color=color,
                         alpha=0.4, label="_nolegend_")

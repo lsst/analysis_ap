@@ -39,6 +39,8 @@ import lsst.afw.cameraGeom as cameraGeom
 from lsst.obs.decam import DarkEnergyCamera
 from lsst.pipe.base import Struct
 
+from .plotUtils import band_color
+
 '''All of the functions herein are deprecated legacy functions.
 In the comments, each has an associated ticket, and once those tickets
 are complete so the plotting functionality is elsewhere, the legacy code
@@ -990,16 +992,7 @@ def source_magnitude_histogram(repo, sourceTable, bandToPlot, instrument,
         band = sourceTable.loc[sourceTable['visit'] == visit, 'filterName'].values[0]
         if band != bandToPlot:
             continue
-        if band == 'g':
-            color = 'C2'
-        elif band == 'r':
-            color = 'C1'
-        elif band == 'i':
-            color = 'C3'
-        elif band == 'z':
-            color = 'C5'
-        else:
-            color = 'k'  # should be y
+        color = band_color(band)
         src = butler.get("src", dataId={"visit": visit, "detector": detectorToUse},
                          collections=collections, instrument=instrument)
         flag_src = [False]*len(src)
