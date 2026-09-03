@@ -346,9 +346,59 @@ def compare_objects(query1, query2, match_radius=0.5):
     return unique1, unique2, matched
 
 
+def _match_source_ids(sources1, sources2, match_radius):
+    """Return the (diaSourceId, diaSourceId_2) correspondence between two
+    runs' diaSource catalogs, plus run 1's sky position for each pair.
+
+    diaSourceIds are not stable across runs -- they end in a per-catalog
+    counter assigned in detection order, which any change to detection
+    or measurement renumbers -- so the same detection must be identified
+    by position within a single (visit, detector).
+
+    Parameters
+    ----------
+    sources1, sources2 : `pandas.DataFrame`
+        diaSource catalogs, each with `diaSourceId`, `diaObjectId`,
+        `ra`, `dec`, `visit` and `detector`.
+    match_radius : `float`
+        Maximum separation in arcsec for a pair to count as the same
+        detection.
+
+    Returns
+    -------
+    paired : `pandas.DataFrame`
+        Columns `diaSourceId`, `diaObjectId`, `ra`, `dec` (all from run
+        1), `diaSourceId_2` and `diaObjectId_2` (from run 2). One row
+        per matched pair; unmatched sources are absent.
+    """
+    cols = ["diaSourceId", "diaObjectId", "ra", "dec", "visit", "detector"]
+    matched, _, _ = match_catalogs(sources1[cols], sources2[cols],
+                                   radius=match_radius * u.arcsec,
+                                   on=("visit", "detector"))
+    # match_catalogs gives every run-1 source its nearest run-2 neighbor, so
+    # two run-1 sources can claim the same run-2 source; keep only the closest
+    # of those so the pairing stays one-to-one.
+    matched = matched.sort_values("xmatch_dist_arcsec").drop_duplicates(
+        subset="diaSourceId_2")
+    return matched[["diaSourceId", "diaObjectId", "ra", "dec",
+                    "diaSourceId_2"]].merge(
+        sources2[["diaSourceId", "diaObjectId"]].rename(
+            columns={"diaSourceId": "diaSourceId_2",
+                     "diaObjectId": "diaObjectId_2"}),
+        on="diaSourceId_2", how="inner")
+
+
+def _to_run1_ids(sources2, obj2_ids, id2_to_id1):
+    """Return the run-1 diaSourceIds of every run-2 diaSource owned by
+    one of ``obj2_ids``, dropping any with no run-1 counterpart.
+    """
+    ids2 = sources2.loc[sources2["diaObjectId"].isin(obj2_ids), "diaSourceId"]
+    return {id2_to_id1[i] for i in ids2 if i in id2_to_id1}
+
+
 def find_objects_sharing_sources(diaObjectId, sources1, sources2,
                                  objects1, objects2,
-                                 max_distance_arcsec=2):
+                                 max_distance_arcsec=2, match_radius=0.5):
     """For a diaObjectId in run 1, return the full association cluster
     of diaSources and diaObjects from both runs.
 
@@ -360,7 +410,11 @@ def find_objects_sharing_sources(diaObjectId, sources1, sources2,
     (e.g. run 2 merges A+B into Z, then a third source in B is split
     into a fourth object in run 2, etc.).
 
-    Assumes diaSourceIds are stable across the two runs.
+    diaSourceIds are *not* stable across runs (they end in a per-catalog
+    counter assigned in detection order), so the two runs' diaSources
+    are paired by position via `_match_source_ids`. Only detections
+    present in both runs carry the graph; a diaSource with no
+    counterpart within ``match_radius`` cannot link objects across runs.
 
     Parameters
     ----------
@@ -379,6 +433,9 @@ def find_objects_sharing_sources(diaObjectId, sources1, sources2,
         If given, only include diaSources within this distance of the input
         diaObject's (ra, dec) in the search. All diaSources of the final
         diaObjects will still be returned, even if outside this distance.
+    match_radius : `float`, optional
+        Maximum separation in arcsec for a run-1 and a run-2 diaSource to
+        be treated as the same detection.
 
     Returns
     -------
@@ -392,6 +449,12 @@ def find_objects_sharing_sources(diaObjectId, sources1, sources2,
         Rows of `objects2` for every run-2 diaObject containing any of
         those diaSources in run 2.
     """
+    # Pair the two runs' diaSources up front; the search below runs in
+    # run-1 id space and translates run-2 sources through this map.
+    paired = _match_source_ids(sources1, sources2, match_radius)
+    id2_to_id1 = dict(zip(paired["diaSourceId_2"], paired["diaSourceId"]))
+    id1_to_id2 = dict(zip(paired["diaSourceId"], paired["diaSourceId_2"]))
+
     if max_distance_arcsec is not None:
         ref_match = objects1[objects1["diaObjectId"] == diaObjectId]
         if len(ref_match) == 0:
@@ -400,8 +463,9 @@ def find_objects_sharing_sources(diaObjectId, sources1, sources2,
         ref_row = ref_match.iloc[0]
         ref = coord.SkyCoord(ra=ref_row["ra"] * u.deg,
                              dec=ref_row["dec"] * u.deg)
-        # diaSourceIds (and their sky positions) match across runs, so
-        # filtering once against sources1 suffices.
+        # The search space is run-1 diaSourceIds, so filter against
+        # sources1; positions agree between paired sources to within
+        # match_radius.
         sep = ref.separation(
             coord.SkyCoord(ra=sources1["ra"].values * u.deg,
                            dec=sources1["dec"].values * u.deg)
@@ -424,9 +488,7 @@ def find_objects_sharing_sources(diaObjectId, sources1, sources2,
         new_src_ids = set(
             sources1.loc[sources1["diaObjectId"].isin(obj1_ids),
                          "diaSourceId"])
-        new_src_ids.update(
-            sources2.loc[sources2["diaObjectId"].isin(obj2_ids),
-                         "diaSourceId"])
+        new_src_ids.update(_to_run1_ids(sources2, obj2_ids, id2_to_id1))
         if allowed_src_ids is not None:
             new_src_ids &= allowed_src_ids
         if new_src_ids <= src_ids:
@@ -435,16 +497,16 @@ def find_objects_sharing_sources(diaObjectId, sources1, sources2,
         obj1_ids |= set(
             sources1.loc[sources1["diaSourceId"].isin(src_ids),
                          "diaObjectId"])
+        run2_ids = {id1_to_id2[i] for i in src_ids if i in id1_to_id2}
         obj2_ids |= set(
-            sources2.loc[sources2["diaSourceId"].isin(src_ids),
+            sources2.loc[sources2["diaSourceId"].isin(run2_ids),
                          "diaObjectId"])
 
     # Expand the final diaSource list to every source owned by any
     # surviving diaObject.
     final_src_ids = set(
         sources1.loc[sources1["diaObjectId"].isin(obj1_ids), "diaSourceId"])
-    final_src_ids |= set(
-        sources2.loc[sources2["diaObjectId"].isin(obj2_ids), "diaSourceId"])
+    final_src_ids |= _to_run1_ids(sources2, obj2_ids, id2_to_id1)
 
     sources = sources1[sources1["diaSourceId"].isin(final_src_ids)]
     related_objects1 = objects1[objects1["diaObjectId"].isin(obj1_ids)]
@@ -489,30 +551,37 @@ class _UnionFind:
             self._rank[rx] += 1
 
 
-def classify_association_clusters(sources1, sources2):
+def classify_association_clusters(sources1, sources2, match_radius=0.5):
     """Enumerate and classify every association-disagreement cluster
     between two APDBs that share input diaSources.
 
     Builds the bipartite graph whose edges are
     ``(diaSource -> its run-1 diaObject, diaSource -> its run-2
-    diaObject)`` over all common diaSources, runs union-find over the
-    diaObjectIds to extract every connected component, and labels each
-    cluster:
+    diaObject)`` over all diaSources the two runs have in common, runs
+    union-find over the diaObjectIds to extract every connected
+    component, and labels each cluster:
 
       * ``matched``  -- one run-1 obj <-> one run-2 obj.
       * ``split``    -- one run-1 obj split into multiple run-2 objs.
       * ``merged``   -- multiple run-1 objs merged into one run-2 obj.
       * ``tangled``  -- M run-1 objs <-> N run-2 objs, both > 1.
 
-    Assumes diaSourceIds are stable across the two runs; diaSources
-    present in only one catalog are silently skipped via inner join.
+    diaSourceIds are *not* stable across runs: they carry a per-catalog
+    counter assigned in detection order, so any change to detection or
+    measurement renumbers them. The common diaSources are therefore
+    identified by position (nearest neighbor within ``match_radius``,
+    inside a single (visit, detector)) rather than by id. Sources with
+    no counterpart in the other run are skipped.
 
     Parameters
     ----------
     sources1, sources2 : `pandas.DataFrame`
         Full diaSources catalogs from runs 1 and 2 (e.g. from
         ``query.load_sources()``). Each must contain `diaSourceId`,
-        `diaObjectId`, `ra`, and `dec` columns.
+        `diaObjectId`, `ra`, `dec`, `visit`, and `detector` columns.
+    match_radius : `float`, optional
+        Maximum separation in arcsec for two diaSources to be considered
+        the same detection in both runs.
 
     Returns
     -------
@@ -520,7 +589,7 @@ def classify_association_clusters(sources1, sources2):
         One row per cluster, with columns:
           - ``kind``: matched / split / merged / tangled.
           - ``n_obj1``, ``n_obj2``: distinct diaObject counts per run.
-          - ``n_sources``: distinct diaSources in the cluster.
+          - ``n_sources``: matched diaSource pairs in the cluster.
           - ``obj1_ids``, ``obj2_ids``: tuples of diaObjectIds.
           - ``ra``, ``dec``: mean sky position of the cluster's
             diaSources (degrees).
@@ -530,10 +599,7 @@ def classify_association_clusters(sources1, sources2):
     kind_dtype = pd.CategoricalDtype(
         categories=["matched", "split", "merged", "tangled"], ordered=True)
 
-    paired = sources1[["diaSourceId", "diaObjectId", "ra", "dec"]].merge(
-        sources2[["diaSourceId", "diaObjectId"]].rename(
-            columns={"diaObjectId": "diaObjectId_2"}),
-        on="diaSourceId", how="inner")
+    paired = _match_source_ids(sources1, sources2, match_radius)
 
     if len(paired) == 0:
         empty = pd.DataFrame(columns=[
