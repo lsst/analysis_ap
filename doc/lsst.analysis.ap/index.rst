@@ -8,15 +8,19 @@ lsst.analysis.ap
 
 This package contains scripts and pipelines to compute quality assurance metrics and make plots to study the output products of the alerts pipeline.
 
-.. .. _lsst.analysis.ap-using:
+.. _lsst.analysis.ap-using:
 
-.. Using lsst.analysis.ap
-.. ======================
+Using lsst.analysis.ap
+======================
 
-.. toctree linking to topics related to using the module's APIs.
+.. toctree::
+   :maxdepth: 1
 
-.. .. toctree::
-..    :maxdepth: 1
+   overview
+   notebook-tools
+   cutouts
+   ppdb
+   runtimes
 
 .. _lsst.analysis.ap-contributing:
 
@@ -55,6 +59,7 @@ Script reference
    :maxdepth: 1
 
    scripts/plotImageSubtractionCutouts
+   scripts/plotDiaSourceLightcurve
 
 .. _lsst.analysis.ap-pyapi:
 
