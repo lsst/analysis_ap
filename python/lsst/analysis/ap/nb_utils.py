@@ -1614,19 +1614,19 @@ def display_images(butler, visit, detector, backend="firefly", *,
     pipeline assigned. Circle sizes step by 2 so successive ``o`` markers
     nest rather than stack.
 
-    ============================  =======  ====  ===========================
-    catalog                       symbol   size  color
-    ============================  =======  ====  ===========================
-    psf-matching kernel sources   ``o``    12    green
-    unfiltered candidates         footprint  --  red (see ``unfiltered_style``)
-    rejected diaSources           ``+``    10    orange
-    long-trailed sources          ``x``    30    magenta
-    standardized diaSources       ``+``    10    blue
-    APDB, reliability > threshold ``o``    14    blue (+ score text)
-    APDB, reliability ≤ threshold ``o``    14    red
-    solar-system matches          ``o``    16    cyan
-    marginal new diaSources       ``+``    10    yellow
-    ============================  =======  ====  ===========================
+    =============================  =========  ====  ==========================
+    catalog                        symbol     size  color
+    =============================  =========  ====  ==========================
+    psf-matching kernel sources    ``o``      12    green
+    unfiltered candidates          footprint  --    red (``unfiltered_style``)
+    rejected diaSources            ``+``      10    orange
+    long-trailed sources           ``x``      30    magenta
+    standardized diaSources        ``+``      10    blue
+    APDB, reliability > threshold  ``o``      14    blue (+ score text)
+    APDB, reliability ≤ threshold  ``o``      14    red
+    solar-system matches           ``o``      16    cyan
+    marginal new diaSources        ``+``      10    yellow
+    =============================  =========  ====  ==========================
 
     By default the ``dia_source_unfiltered`` catalog is drawn as Firefly
     footprint outlines rather than ``+`` markers; see ``unfiltered_style``.
@@ -2604,23 +2604,20 @@ def display_footprints(butler=None, visit=None, detector=None,
 
 
 def extract_timestamped_messages(log: str | dict[str, Any]) -> str:
-    """
-    Extract records[*].(asctime, message) from an LSST-style JSON log and
-    format as:
+    """Extract ``records[*].(asctime, message)`` from an LSST-style JSON
+    log and format them one per line, as::
+
         2026-02-25T04:15:35.092108Z Preparing execution...
-    one per line.
 
     Parameters
     ----------
-    log:
-        Either the JSON text (str) or a parsed dict.
-    sort:
-        If True, sort by asctime (robust if log fragments are concatenated).
+    log : `str` or `dict` [`str`, `Any`]
+        Either the JSON text or an already-parsed dict.
 
     Returns
     -------
-    str
-        Joined lines.
+    messages : `str`
+        The joined ``asctime message`` lines.
     """
     if isinstance(log, str):
         s = log.strip()
