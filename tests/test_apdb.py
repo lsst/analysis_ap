@@ -156,6 +156,41 @@ class TestApdbSqlite(lsst.utils.tests.TestCase):
         self.assertEqual(str(query.whereclause.compile(compile_kwargs={"literal_binds": True})),
                          queryString)
 
+    def test_diaObjectId_int_when_null_present(self):
+        """diaObjectId must round-trip as an exact integer even when some
+        rows have SQL NULL diaObjectId (e.g. ssObject-only diaSources).
+        The 18-digit IDs exceed float64 precision (2**53), so a naive read
+        that downgrades the column to float64 would mangle them. The
+        fixture has no NULLs, so simulate one by patching a temp copy.
+        """
+        import tempfile
+        import shutil
+        import sqlite3
+
+        src = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "data", "apdb.sqlite3")
+        with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as tmp:
+            shutil.copy(src, tmp.name)
+            path = tmp.name
+        try:
+            with sqlite3.connect(path) as conn:
+                conn.execute(
+                    "UPDATE DiaSource SET diaObjectId = NULL "
+                    "WHERE diaSourceId = 506428274000265217")
+            apdb = ApdbSqliteQuery(path)
+            result = apdb.load_sources(limit=None)
+            self.assertEqual(str(result["diaObjectId"].dtype), "Int64")
+            # The exact integer must be preserved (would round to
+            # 506428274000265216 if the column were float64).
+            row = result.loc[result["diaSourceId"] == 506428274000265218]
+            self.assertEqual(int(row["diaObjectId"].iloc[0]),
+                             506428274000265218)
+            # The nulled row must be pd.NA, not a mangled numeric value.
+            nulled = result.loc[result["diaSourceId"] == 506428274000265217]
+            self.assertTrue(pd.isna(nulled["diaObjectId"].iloc[0]))
+        finally:
+            os.unlink(path)
+
     def test_fill_from_instrument(self):
         # an empty series should be unchanged
         empty = pd.Series()

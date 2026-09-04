@@ -26,10 +26,87 @@ __all__ = ["DbQuery", "ApdbSqliteQuery", "ApdbPostgresQuery"]
 
 import abc
 import contextlib
+import os
 import warnings
+from importlib.resources import files
 
+import felis.datamodel
 import pandas as pd
 import sqlalchemy
+
+from lsst.pipe.tasks.schemaUtils import column_dtype, readSdmSchemaFile
+
+
+# Integer felis types whose default pandas read path silently coerces NULL
+# rows through float64. Drive the dtype from the SDM schema for these types
+# only and leave float / bool / string / timestamp columns to pandas' default
+# inference so we don't perturb unrelated behavior.
+_INT_FELIS_TYPES = frozenset({
+    felis.datamodel.DataType.long,
+    felis.datamodel.DataType.int,
+    felis.datamodel.DataType.short,
+    felis.datamodel.DataType.byte,
+})
+
+
+_apdb_schema_cache = None
+
+
+def _apdb_schema():
+    """Lazily load the APDB SDM schema (``sdm_schemas/apdb.yaml``) once."""
+    global _apdb_schema_cache
+    if _apdb_schema_cache is None:
+        path = os.fspath(files("lsst.sdm.schemas").joinpath("apdb.yaml"))
+        _apdb_schema_cache = readSdmSchemaFile(path)
+    return _apdb_schema_cache
+
+
+def _schema_int_dtypes(table_name):
+    """Return a {column_name: pandas-dtype} mapping for integer columns of
+    one APDB table.
+
+    Returns an empty dict if the table is not in the SDM schema (e.g. an
+    older fixture with tables that have since been removed).
+    """
+    table_def = _apdb_schema().get(table_name)
+    if table_def is None:
+        return {}
+    return {
+        cdef.name: column_dtype(cdef.datatype, nullable=cdef.nullable)
+        for cdef in table_def.columns
+        if cdef.datatype in _INT_FELIS_TYPES
+    }
+
+
+def _read_query(connection, query, table_name=None):
+    """Run ``query`` on ``connection`` and return a DataFrame with correct
+    integer-column dtypes.
+
+    ``pd.read_sql_query`` represents SQL NULLs as ``NaN`` and so forces any
+    nullable BIGINT column through ``float64``.
+    Here we fetch rows directly from the cursor and build each integer
+    column with the dtype declared by the SDM schema (looked up via
+    ``schemaUtils.column_dtype``); other columns fall through to pandas'
+    default inference.
+    """
+    cursor = connection.execute(query)
+    columns = list(cursor.keys())
+    rows = cursor.fetchall()
+    dtype_map = _schema_int_dtypes(table_name) if table_name else {}
+    data = {}
+    for i, col in enumerate(columns):
+        values = [row[i] for row in rows]
+        dtype = dtype_map.get(col)
+        if dtype is not None:
+            try:
+                data[col] = pd.array(values, dtype=dtype)
+                continue
+            except (TypeError, ValueError):
+                # Cast impossible (driver returned an unexpected type);
+                # fall through to pandas inference.
+                pass
+        data[col] = values
+    return pd.DataFrame(data)
 
 
 class DbQuery(abc.ABC):
@@ -255,17 +332,7 @@ class DbSqlQuery(DbQuery):
         pass
 
     def set_excluded_diaSource_flags(self, flag_list):
-        """Set flags of diaSources to exclude when loading diaSources.
-
-        Any diaSources with configured flags are not returned
-        when calling `load_sources_for_object` or `load_sources`
-        with `exclude_flagged = True`.
-
-        Parameters
-        ----------
-        flag_list : `list` [`str`]
-            Flag names to exclude.
-        """
+        # Docstring is inherited.
         for flag in flag_list:
             if flag not in self._tables["DiaSource"].columns:
                 raise ValueError(f"flag {flag} not included in DiaSource flags")
@@ -273,249 +340,233 @@ class DbSqlQuery(DbQuery):
         self.diaSource_flags_exclude = flag_list
 
     def _make_flag_exclusion_query(self, query, table, flag_list):
-        """Return an SQL where query that excludes sources with chosen flags.
+        """Attach a where clause excluding sources with any chosen flag set.
 
         Parameters
         ----------
-        flag_list : `list` [`str`]
-            Flag names to exclude.
-        query : `sqlalchemy.sql.Query`
-            Query to include the where statement in.
+        query : `sqlalchemy.sql.Select`
+            Query to attach the where clause to.
         table : `sqlalchemy.schema.Table`
-            Table containing the column to be queried.
+            Reflected table containing the flag columns.
+        flag_list : `list` [`str`]
+            Flag column names to exclude.
 
         Returns
         -------
-        query : `sqlalchemy.sql.Query`
-            Query that selects rows to exclude based on flags.
+        query : `sqlalchemy.sql.Select`
+            Query with the flag exclusion clause attached.
         """
-        # Build a query that selects any source with one or more chosen flags,
-        # and return the opposite (`not_`) of that query.
-        query = query.where(sqlalchemy.and_(table.columns[flag_col] == False  # noqa: E712
-                                            for flag_col in flag_list))
-        return query
+        return query.where(sqlalchemy.and_(table.columns[col] == False  # noqa: E712
+                                           for col in flag_list))
 
-    def load_sources_for_object(self, dia_object_id, exclude_flagged=False, limit=100000):
-        """Load diaSources for a single diaObject.
+    def _load_table(self, table, *, where=None, exclude_flagged=False,
+                    order_by=(), limit=None, fill_instrument=True):
+        """Run a parameterized SELECT and return the result as a DataFrame.
 
         Parameters
         ----------
-        dia_object_id : `int`
-            Id of object to load sources for.
+        table : `sqlalchemy.schema.Table`
+            Reflected table to query.
+        where : `sqlalchemy.sql.ClauseElement`, optional
+            Extra where clause to attach.
         exclude_flagged : `bool`, optional
-            Exclude sources that have selected flags set.
-            Use `set_excluded_diaSource_flags` to configure which flags
-            are excluded.
-        limit : `int`
-            Maximum number of rows to return.
+            If True, attach the configured flag-exclusion clause.
+        order_by : `tuple` [`str`], optional
+            Column names to order by.
+        limit : `int`, optional
+            Maximum number of rows to return; None means no limit.
+        fill_instrument : `bool`, optional
+            If True, append an ``instrument`` column to the result.
 
         Returns
         -------
-        data : `pandas.DataFrame`
-            A data frame of diaSources for the specified diaObject.
+        result : `pandas.DataFrame`
         """
-        table = self._tables["DiaSource"]
-        query = table.select().where(table.columns["diaObjectId"] == dia_object_id)
-        if exclude_flagged:
-            query = self._make_flag_exclusion_query(query, table, self.diaSource_flags_exclude)
-        query = query.order_by(table.columns["visit"],
-                               table.columns["detector"],
-                               table.columns["diaSourceId"])
-        with self.connection as connection:
-            result = pd.read_sql_query(query, connection)
-
-        self._fill_from_instrument(result)
-        return result
-
-    def load_forced_sources_for_object(self, dia_object_id, exclude_flagged=False, limit=100000):
-        """Load diaForcedSources for a single diaObject.
-
-        Parameters
-        ----------
-        dia_object_id : `int`
-            Id of object to load sources for.
-        exclude_flagged : `bool`, optional
-            Exclude sources that have selected flags set.
-            Use `set_excluded_diaSource_flags` to configure which flags
-            are excluded.
-        limit : `int`
-            Maximum number of rows to return.
-
-        Returns
-        -------
-        data : `pandas.DataFrame`
-            A data frame of diaSources for the specified diaObject.
-        """
-        table = self._tables["DiaForcedSource"]
-        query = table.select().where(table.columns["diaObjectId"] == dia_object_id)
-        if exclude_flagged:
-            query = self._make_flag_exclusion_query(query, table, self.diaSource_flags_exclude)
-        query = query.order_by(table.columns["visit"],
-                               table.columns["detector"],
-                               table.columns["diaForcedSourceId"])
-        with self.connection as connection:
-            result = pd.read_sql_query(query, connection)
-
-        self._fill_from_instrument(result)
-        return result
-
-    def load_source(self, id):
-        """Load one diaSource.
-
-        Parameters
-        ----------
-        id : `int`
-            The diaSourceId to load data for.
-
-        Returns
-        -------
-        data : `pandas.Series`
-            The requested diaSource.
-        """
-        table = self._tables["DiaSource"]
-        query = table.select().where(table.columns["diaSourceId"] == id)
-        with self.connection as connection:
-            result = pd.read_sql_query(query, connection)
-        if len(result) == 0:
-            raise RuntimeError(f"diaSourceId={id} not found in DiaSource table")
-
-        self._fill_from_instrument(result)
-        return result.iloc[0]
-
-    def load_sources(self, exclude_flagged=False, limit=100000):
-        """Load diaSources.
-
-        Parameters
-        ----------
-        exclude_flagged : `bool`, optional
-            Exclude sources that have selected flags set.
-            Use `set_excluded_diaSource_flags` to configure which flags
-            are excluded.
-        limit : `int`
-            Maximum number of rows to return.
-
-        Returns
-        -------
-        data : `pandas.DataFrame`
-            All available diaSources.
-        """
-        table = self._tables["DiaSource"]
         query = table.select()
+        if where is not None:
+            query = query.where(where)
         if exclude_flagged:
             query = self._make_flag_exclusion_query(query, table, self.diaSource_flags_exclude)
-        query = query.order_by(table.columns["visit"],
-                               table.columns["detector"],
-                               table.columns["diaSourceId"])
+        if order_by:
+            query = query.order_by(*[table.columns[c] for c in order_by])
         if limit is not None:
             query = query.limit(limit)
-
         with self.connection as connection:
-            result = pd.read_sql_query(query, connection)
-
-        self._fill_from_instrument(result)
+            result = _read_query(connection, query, table_name=table.name)
+        if fill_instrument:
+            self._fill_from_instrument(result)
         return result
 
-    def load_object(self, id):
-        """Load the most-recently updated version of one diaObject.
+    def _load_one(self, table_name, id_column, id_value, fill_instrument=True):
+        """Load a single row from a table by id, raising if missing.
 
         Parameters
         ----------
-        id : `int`
-            The diaObjectId to load data for.
+        table_name : `str`
+            Key into ``self._tables`` for the table to query.
+        id_column : `str`
+            Name of the id column to filter on.
+        id_value : `int`
+            Id value to match.
+        fill_instrument : `bool`, optional
+            If True, append an ``instrument`` column to the result.
 
         Returns
         -------
-        data : `pandas.Series`
-            The requested object.
+        row : `pandas.Series`
+
+        Raises
+        ------
+        RuntimeError
+            If no row matches.
         """
+        table = self._tables[table_name]
+        result = self._load_table(table,
+                                  where=table.columns[id_column] == id_value,
+                                  fill_instrument=fill_instrument)
+        if len(result) == 0:
+            raise RuntimeError(f"{id_column}={id_value} not found in {table_name} table")
+        return result.iloc[0]
+
+    def load_sources_for_object(self, dia_object_id, exclude_flagged=False, limit=100000):
+        # Docstring is inherited.
+        table = self._tables["DiaSource"]
+        return self._load_table(
+            table,
+            where=table.columns["diaObjectId"] == dia_object_id,
+            exclude_flagged=exclude_flagged,
+            order_by=("visit", "detector", "diaSourceId"),
+            limit=limit,
+        )
+
+    def load_forced_sources_for_object(self, dia_object_id, exclude_flagged=False, limit=100000):
+        # Docstring is inherited.
+        table = self._tables["DiaForcedSource"]
+        return self._load_table(
+            table,
+            where=table.columns["diaObjectId"] == dia_object_id,
+            exclude_flagged=exclude_flagged,
+            order_by=("visit", "detector", "diaForcedSourceId"),
+            limit=limit,
+        )
+
+    def load_source(self, id):
+        # Docstring is inherited.
+        return self._load_one("DiaSource", "diaSourceId", id)
+
+    def load_sources(self, exclude_flagged=False, limit=100000):
+        # Docstring is inherited.
+        return self._load_table(
+            self._tables["DiaSource"],
+            exclude_flagged=exclude_flagged,
+            order_by=("visit", "detector", "diaSourceId"),
+            limit=limit,
+        )
+
+    @staticmethod
+    def _validity_end_column(table):
+        """Return the DiaObject "validity end" column.
+
+        sdm_schemas renamed this to ``validityEndMjdTai`` (it's also nullable
+        double-precision MJD now, not a TIMESTAMP). Older fixtures still have
+        the original ``validityEnd`` name; this helper prefers the current
+        name and falls back to the legacy one.
+        """
+        for name in ("validityEndMjdTai", "validityEnd"):
+            if name in table.columns:
+                return table.columns[name]
+        raise KeyError("DiaObject has neither validityEndMjdTai nor validityEnd")
+
+    def load_object(self, id):
+        # Docstring is inherited.
         table = self._tables["DiaObject"]
-        query = table.select().where(table.columns["validityEnd"] == None)  # noqa: E711
-        query = query.where(table.columns["diaObjectId"] == id)
-        with self.connection as connection:
-            result = pd.read_sql_query(query, connection)
+        result = self._load_table(
+            table,
+            where=sqlalchemy.and_(
+                self._validity_end_column(table) == None,  # noqa: E711
+                table.columns["diaObjectId"] == id,
+            ),
+            fill_instrument=False,
+        )
         if len(result) == 0:
             raise RuntimeError(f"diaObjectId={id} not found in DiaObject table")
-
         return result.iloc[0]
 
     def load_objects(self, limit=100000, latest=True):
-        """Load all diaObjects.
-
-        Parameters
-        ----------
-        limit : `int`
-            Maximum number of rows to return.
-        latest : `bool`
-            Only load diaObjects where validityEnd is None.
-            These are the most-recently updated diaObjects.
-
-        Returns
-        -------
-        data : `pandas.DataFrame`
-            All available diaObjects.
-        """
+        # Docstring is inherited.
         table = self._tables["DiaObject"]
-        if latest:
-            query = table.select().where(table.columns["validityEnd"] == None)  # noqa: E711
-        else:
-            query = table.select()
-        query = query.order_by(table.columns["diaObjectId"])
-        if limit is not None:
-            query = query.limit(limit)
-
-        with self.connection as connection:
-            result = pd.read_sql_query(query, connection)
-
-        return result
+        where = self._validity_end_column(table) == None if latest else None  # noqa: E711
+        return self._load_table(
+            table,
+            where=where,
+            order_by=("diaObjectId",),
+            limit=limit,
+            fill_instrument=False,
+        )
 
     def load_forced_source(self, id):
-        """Load one diaForcedSource.
-
-        Parameters
-        ----------
-        id : `int`
-            The diaForcedSourceId to load data for.
-
-        Returns
-        -------
-        data : `pandas.Series`
-            The requested forced source.
-        """
-        table = self._tables["DiaForcedSource"]
-        query = table.select().where(table.columns["diaForcedSourceId"] == id)
-        with self.connection as connection:
-            result = pd.read_sql_query(query, connection)
-        if len(result) == 0:
-            raise RuntimeError(f"diaForcedSourceId={id} not found in DiaForcedSource table")
-
-        self._fill_from_instrument(result)
-        return result.iloc[0]
+        # Docstring is inherited.
+        return self._load_one("DiaForcedSource", "diaForcedSourceId", id)
 
     def load_forced_sources(self, limit=100000):
-        """Load all diaForcedSources.
+        # Docstring is inherited.
+        return self._load_table(
+            self._tables["DiaForcedSource"],
+            order_by=("visit", "detector", "diaForcedSourceId"),
+            limit=limit,
+        )
+
+    def iter_sources(self, page_size=100000, reliability_min=None, reliability_max=None):
+        """Yield DiaSources in pages of ``page_size`` rows.
 
         Parameters
         ----------
-        limit : `int`
-            Maximum number of rows to return.
+        page_size : `int`
+            Number of rows per page.
+        reliability_min, reliability_max : `float`, optional
+            Inclusive bounds on the reliability column.
+
+        Yields
+        ------
+        page : `pandas.DataFrame`
+            One page of DiaSources, with the ``instrument`` column attached.
+        """
+        table = self._tables["DiaSource"]
+        clauses = []
+        if reliability_min is not None:
+            clauses.append(table.columns["reliability"] >= reliability_min)
+        if reliability_max is not None:
+            clauses.append(table.columns["reliability"] <= reliability_max)
+        where = sqlalchemy.and_(*clauses) if clauses else None
+
+        offset = 0
+        while True:
+            query = table.select()
+            if where is not None:
+                query = query.where(where)
+            query = query.order_by(table.columns["visit"],
+                                   table.columns["detector"],
+                                   table.columns["diaSourceId"])
+            query = query.limit(page_size).offset(offset)
+            with self.connection as connection:
+                page = _read_query(connection, query, table_name=table.name)
+            if len(page) == 0:
+                break
+            self._fill_from_instrument(page)
+            yield page
+            offset += page_size
+
+    def count_sources(self):
+        """Return the total number of DiaSources in the database.
 
         Returns
         -------
-        data : `pandas.DataFrame`
-            All available diaForcedSources.
+        count : `int`
         """
-        table = self._tables["DiaForcedSource"]
-        query = table.select()
-        query = query.order_by(table.columns["visit"],
-                               table.columns["detector"],
-                               table.columns["diaForcedSourceId"])
-        if limit is not None:
-            query = query.limit(limit)
-
+        table = self._tables["DiaSource"]
+        query = sqlalchemy.select(sqlalchemy.func.count()).select_from(table)
         with self.connection as connection:
-            result = pd.read_sql_query(query, connection)
-        self._fill_from_instrument(result)
-        return result
+            return connection.execute(query).scalar()
 
     def _fill_from_instrument(self, diaSources):
         """Add an instrument column to a list of sources.
