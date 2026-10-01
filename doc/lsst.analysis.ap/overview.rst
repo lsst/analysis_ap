@@ -48,6 +48,8 @@ association changes.
 **Run diagnostics.**
 :doc:`taskRuntimes <runtimes>` summarizes per-task wall time and peak memory from the
 ``*_metadata`` datasets of a butler run.
+:doc:`templateInputs <template-inputs>` finds the images, observation times
+and weights that make up the template at each diaSource.
 `extract_timestamped_messages` flattens an LSST JSON log
 into readable timestamped lines.
 
@@ -100,3 +102,4 @@ Where to go next
 - :doc:`cutouts` — generate diaSource cutout PNGs, with or without lightcurves.
 - :doc:`ppdb` — query the PPDB over TAP and map its contents on the sky.
 - :doc:`runtimes` — profile a pipeline run's task runtimes and memory.
+- :doc:`template-inputs` — find the input images and epochs of a diaSource's template.
