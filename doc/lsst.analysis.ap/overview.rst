@@ -88,7 +88,7 @@ through a large table and is what the cutout scripts use.
 The **PPDB** is the long-lived, replicated database that scientists will query.
 It is reached through TAP rather than a direct connection, on purpose: exercising
 `~lsst.analysis.ap.ppdb.PpdbTap` exercises the same interface users will have.
-See :doc:`ppdb` for the access token, the versioned ``DiaObject`` table, and the
+See :doc:`ppdb` for the access token, the latest-only ``DiaObject`` table, and the
 object-first query pattern the production PPDB requires.
 
 .. _lsst.analysis.ap-overview-guides:

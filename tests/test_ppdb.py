@@ -155,14 +155,9 @@ class TestLoadObjects(lsst.utils.tests.TestCase):
         PpdbTap(service=fake).load_objects()
         query = fake.queries[-1]
         self.assertIn("FROM ppdb.DiaObject", query)
-        self.assertIn("validityEndMjdTai IS NULL", query)
+        self.assertNotIn("WHERE", query)
         self.assertIn("TOP 100000", query)
         self.assertIn("ORDER BY diaObjectId", query)
-
-    def test_latest_false_drops_validity_filter(self):
-        fake = _FakeTapService(_objects_table())
-        PpdbTap(service=fake).load_objects(latest=False)
-        self.assertNotIn("validityEndMjdTai", fake.queries[-1])
 
     def test_cone_search(self):
         fake = _FakeTapService(_objects_table())
@@ -216,8 +211,7 @@ class TestLoadObjects(lsst.utils.tests.TestCase):
         fake = _FakeTapService(_objects_table((7,)))
         row = PpdbTap(service=fake).load_object(7)
         self.assertEqual(row["diaObjectId"], 7)
-        self.assertIn("diaObjectId = 7", fake.queries[-1])
-        self.assertIn("validityEndMjdTai IS NULL", fake.queries[-1])
+        self.assertIn("WHERE diaObjectId = 7", fake.queries[-1])
 
 
 class TestLoadSources(lsst.utils.tests.TestCase):
@@ -300,7 +294,6 @@ class TestRegionAndCone(lsst.utils.tests.TestCase):
         # first: cone on DiaObject (the only table allowing spatial search).
         obj_query = fake.queries[0]
         self.assertIn("FROM ppdb.DiaObject", obj_query)
-        self.assertIn("validityEndMjdTai IS NULL", obj_query)
         self.assertIn("CONTAINS(POINT('ICRS', ra, dec)", obj_query)
         # second: sources by id, with no spatial predicate.
         src_query = fake.queries[1]
@@ -411,12 +404,12 @@ class TestColumnOrdering(lsst.utils.tests.TestCase):
     def test_objects_columns_reordered_to_sdm(self):
         scrambled = astropy.table.Table({
             "ra": [150.0], "diaObjectId": [1], "dec": [2.0],
-            "validityEndMjdTai": [60000.0]})
+            "validityStartMjdTai": [60000.0]})
         fake = _FakeTapService(scrambled)
         result = PpdbTap(service=fake).load_objects()
         self.assertEqual(
             result.colnames,
-            ["diaObjectId", "validityEndMjdTai", "ra", "dec"])
+            ["diaObjectId", "validityStartMjdTai", "ra", "dec"])
 
     def test_load_object_row_in_sdm_order(self):
         scrambled = astropy.table.Table({

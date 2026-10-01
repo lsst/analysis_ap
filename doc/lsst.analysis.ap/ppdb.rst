@@ -43,18 +43,14 @@ Tokens are read only from the environment or the constructor and are never logge
 `PpdbTap.run_query` is available for arbitrary ADQL when the loaders do not cover
 what you need.
 
-.. _lsst.analysis.ap-ppdb-versioning:
+.. _lsst.analysis.ap-ppdb-schema:
 
 Two things to know about the schema
 ===================================
 
-**DiaObject is versioned.**
-A single object accumulates multiple rows over time, and only the row with
-``validityEndMjdTai IS NULL`` is the current version.
-Every DiaObject query here applies that filter by default (``latest=True``) so you
-cannot accidentally retrieve or double-count stale versions; ``latest=False`` returns
-the full history and is rarely what you want.
-DiaSource and DiaForcedSource are append-only and unversioned.
+**DiaObject holds only the latest version of each object.**
+The PPDB keeps one row per ``diaObjectId``; earlier versions are not stored.
+DiaSource and DiaForcedSource are append-only.
 
 **The source tables are not spatially searchable in production.**
 The production PPDB will permit cone searches only on ``DiaObject``.

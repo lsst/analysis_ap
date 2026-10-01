@@ -32,11 +32,9 @@ The prototype PPDB currently lives at the ``data-int`` RSP environment
 token carrying the ``read:tap`` scope, supplied via the ``RSP_TOKEN``
 environment variable.
 
-The ``DiaObject`` table is versioned: a single object accumulates multiple
-rows over time and only the row with ``validityEndMjdTai IS NULL`` is the
-current version. Every DiaObject query here applies that filter by default
-so callers never accidentally retrieve (or double-count) stale versions.
-``DiaSource`` and ``DiaForcedSource`` are append-only and are not versioned.
+The PPDB ``DiaObject`` table holds only the latest version of each object,
+so it has one row per ``diaObjectId``. ``DiaSource`` and ``DiaForcedSource``
+are append-only.
 
 The production PPDB will allow cone searches only on ``DiaObject``. Sources
 and forced sources for a region must therefore be loaded object-first:
@@ -191,7 +189,7 @@ class DiaObjectLightCurve:
     diaObjectId : `int`
         Identifier of the diaObject.
     dia_object : `astropy.table.Row`
-        The current (latest-version) DiaObject row.
+        The DiaObject row.
     dia_sources : `astropy.table.Table`
         All DiaSources associated with the object, time-ordered.
     dia_forced_sources : `astropy.table.Table`
@@ -385,7 +383,7 @@ class PpdbTap:
     # ------------------------------------------------------------------
     def load_objects(self, *, ra=None, dec=None, radius=None, exposure=None,
                      padding=DEFAULT_PADDING_ARCSEC, columns=None,
-                     limit=DEFAULT_ROW_LIMIT, latest=True):
+                     limit=DEFAULT_ROW_LIMIT):
         """Load DiaObjects, optionally within a spatial region.
 
         Parameters
@@ -404,10 +402,6 @@ class PpdbTap:
             Columns to select; defaults to all columns.
         limit : `int`, optional
             Maximum number of rows to return; None means no limit.
-        latest : `bool`, optional
-            If True (default), return only the current version of each object
-            (``validityEndMjdTai IS NULL``). Setting this False returns every
-            historical version and is rarely what you want.
 
         Returns
         -------
@@ -415,29 +409,24 @@ class PpdbTap:
             The matching DiaObjects.
         """
         cone = self._resolve_cone(ra, dec, radius, exposure, padding)
-        clauses = []
-        if latest:
-            clauses.append("validityEndMjdTai IS NULL")
-        if cone is not None:
-            clauses.append(self._cone_clause(*cone))
-        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        where = f" WHERE {self._cone_clause(*cone)}" if cone is not None else ""
         adql = (f"{self._select_clause(columns, limit)} FROM ppdb.DiaObject"
                 f"{where} ORDER BY diaObjectId")
         order_table = "DiaObject" if columns is None else None
         table = self._finish(self.run_query(adql, order_table=order_table),
                              limit, "DiaObject")
-        if latest and len(table) and "diaObjectId" in table.colnames:
+        if len(table) and "diaObjectId" in table.colnames:
             n_unique = len(set(table["diaObjectId"].tolist()))
             if n_unique != len(table):
                 self.log.warning(
                     "DiaObject query returned %d rows but only %d unique "
-                    "diaObjectIds despite validityEndMjdTai IS NULL; the PPDB "
-                    "may contain duplicate current versions.",
+                    "diaObjectIds; the PPDB may contain duplicate current "
+                    "versions.",
                     len(table), n_unique)
         return table
 
     def load_object(self, diaObjectId, *, columns=None):
-        """Load the current version of a single DiaObject.
+        """Load a single DiaObject.
 
         Parameters
         ----------
@@ -454,11 +443,10 @@ class PpdbTap:
         Raises
         ------
         RuntimeError
-            If no current version of the object exists.
+            If the object is not in the PPDB.
         """
         adql = (f"{self._select_clause(columns, None)} FROM ppdb.DiaObject "
-                f"WHERE validityEndMjdTai IS NULL AND "
-                f"diaObjectId = {int(diaObjectId)}")
+                f"WHERE diaObjectId = {int(diaObjectId)}")
         order_table = "DiaObject" if columns is None else None
         table = self.run_query(adql, order_table=order_table)
         if len(table) == 0:
@@ -466,8 +454,8 @@ class PpdbTap:
                 f"diaObjectId={diaObjectId} not found in ppdb.DiaObject")
         if len(table) > 1:
             self.log.warning(
-                "diaObjectId=%s has %d current versions (validityEndMjdTai "
-                "IS NULL); returning the first.", diaObjectId, len(table))
+                "diaObjectId=%s has %d rows; returning the first.",
+                diaObjectId, len(table))
         return table[0]
 
     # ------------------------------------------------------------------
@@ -933,7 +921,7 @@ class PpdbTap:
     def load_light_curve(self, diaObjectId):
         """Assemble the full PPDB record for one diaObject.
 
-        Loads the current DiaObject plus all of its DiaSources and
+        Loads the DiaObject plus all of its DiaSources and
         DiaForcedSources, time-ordered.
 
         Parameters
@@ -949,7 +937,7 @@ class PpdbTap:
         Raises
         ------
         RuntimeError
-            If no current version of the object exists.
+            If the object is not in the PPDB.
         """
         dia_object = self.load_object(diaObjectId)
         dia_sources = self.load_sources_for_object(diaObjectId)
