@@ -229,8 +229,7 @@ def plot_ppdb_sky_density(table="DiaObject", *, ppdb=None, catalog=None,
     Parameters
     ----------
     table : `str`
-        PPDB table to plot, ``"DiaObject"`` or ``"DiaSource"``. DiaObjects
-        are filtered to their current version (``validityEndMjdTai IS NULL``).
+        PPDB table to plot, ``"DiaObject"`` or ``"DiaSource"``.
     ppdb : `lsst.analysis.ap.ppdb.PpdbTap`, optional
         Reuse an existing loader (avoids re-authenticating); built from
         ``url`` if not given. Needs ``RSP_TOKEN`` in the environment.
@@ -301,13 +300,12 @@ def plot_ppdb_sky_density(table="DiaObject", *, ppdb=None, catalog=None,
 
     # Fetch ra/dec plus the filter column unless a cached catalog was given.
     # The whole (unfiltered) table is returned so thresholds can be retuned
-    # client-side; only the current version of each DiaObject is fetched.
+    # client-side.
     if catalog is None:
         if ppdb is None:
             ppdb = PpdbTap(url=url)
-        where = " WHERE validityEndMjdTai IS NULL" if table == "DiaObject" else ""
         catalog = ppdb.run_query(
-            f"SELECT ra, dec, {column} FROM ppdb.{table}{where}", maxrec=maxrec)
+            f"SELECT ra, dec, {column} FROM ppdb.{table}", maxrec=maxrec)
 
     ra = np.asarray(catalog["ra"], dtype=float)
     dec = np.asarray(catalog["dec"], dtype=float)
