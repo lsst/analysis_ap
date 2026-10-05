@@ -21,6 +21,7 @@ Using lsst.analysis.ap
    cutouts
    ppdb
    runtimes
+   template-inputs
 
 .. _lsst.analysis.ap-contributing:
 
