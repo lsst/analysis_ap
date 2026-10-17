@@ -43,6 +43,8 @@ from typing import Iterable, Mapping
 import numpy as np
 import pandas as pd
 
+from .imageUtils import get_exposure
+
 
 def _finite_view(array):
     """Return only the finite entries of ``array`` as a flat 1-D view."""
@@ -89,7 +91,7 @@ def _mask_plane_fractions(mask):
         return {}
     out = {}
     for plane_name, plane_bit in mask.getMaskPlaneDict().items():
-        bitmask = np.uint64(1) << np.uint64(plane_bit)
+        bitmask = mask.getPlaneBitMask(plane_name)
         out[f"frac_{plane_name}"] = float(np.sum((arr & bitmask) != 0) / npix)
     return out
 
@@ -112,7 +114,7 @@ def image_diff_stats(butler, visit, detector, dataset_name="difference_image"):
         ``{"visit", "detector", "median", "mad", "stddev", "kurtosis"}`` plus
         a ``frac_<PLANE>`` entry per mask plane on the exposure.
     """
-    diff = butler.get(dataset_name, {"visit": visit, "detector": detector})
+    diff = get_exposure(butler, dataset_name, {"visit": visit, "detector": detector})
     stats = {"visit": visit, "detector": detector}
     stats.update(_basic_stats(diff.image.array))
     stats.update(_mask_plane_fractions(diff.mask))
@@ -158,6 +160,7 @@ class PixelCompareResult:
     ----------
     img1, img2 : `lsst.afw.image.Exposure`
         The two loaded exposures, in case the caller wants their masks/WCS.
+        Images stored as `lsst.images` types are converted.
     diff : `numpy.ndarray`
         Pixel array of ``img1 - img2``.
     ratio : `numpy.ndarray`
@@ -182,7 +185,9 @@ def pixel_compare(butler1, butler2, visit, detector,
     """Compare two difference images for the same data id, pixel by pixel.
 
     Pull the same dataId from two butlers (or two collections of one butler)
-    and inspect the residuals.
+    and inspect the residuals. Both images are converted to afw exposures, so
+    a legacy image can be compared with an `lsst.images` one; their mask
+    planes then share the legacy names and bits.
 
     Parameters
     ----------
@@ -204,8 +209,8 @@ def pixel_compare(butler1, butler2, visit, detector,
         If the two loaded images differ in shape (cannot be aligned by simple
         subtraction).
     """
-    img1 = butler1.get(dataset_name, {"visit": visit, "detector": detector})
-    img2 = butler2.get(dataset_name, {"visit": visit, "detector": detector})
+    img1 = get_exposure(butler1, dataset_name, {"visit": visit, "detector": detector})
+    img2 = get_exposure(butler2, dataset_name, {"visit": visit, "detector": detector})
 
     a1 = img1.image.array
     a2 = img2.image.array

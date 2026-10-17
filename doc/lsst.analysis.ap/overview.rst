@@ -57,6 +57,21 @@ Several other modules (``compare``, ``imageQA``, ``plotUtils``,
 ``spatiallySampledMetricsQA``, ``apdbReconstruct``, ``skymapOverlay``) provide
 supporting pieces; see the :ref:`Python API reference <lsst.analysis.ap-pyapi>`.
 
+.. _lsst.analysis.ap-overview-image-formats:
+
+Image formats
+=============
+
+AP image datasets are stored either as legacy afw exposures or as `lsst.images`
+types (`~lsst.images.VisitImage` and `~lsst.images.DifferenceImage`), depending on
+the pipeline that wrote them.
+The image tools accept both.
+They convert an `lsst.images` image to an afw exposure with `as_exposure` and work
+on that, so the mask planes keep their legacy names and a legacy run can be
+compared pixel by pixel with an `lsst.images` one.
+`as_exposure` and `get_exposure` (a butler read followed by `as_exposure`) are
+available for your own notebooks.
+
 .. _lsst.analysis.ap-overview-databases:
 
 APDB or PPDB?

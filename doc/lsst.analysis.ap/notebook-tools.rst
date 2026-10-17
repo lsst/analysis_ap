@@ -169,9 +169,13 @@ template?".
 Frame 0 is the difference image with each contributing patch outlined and labeled
 ``tract,patch``; frames 1..N are the patches themselves, each with the difference
 image's footprint outlined on it.
-The patch list comes from the template's ``coaddInputs`` records, so it is the set of
-patches that supplied *valid pixels* — stricter than a skymap overlap lookup — and the
-printed legend gives each patch's fractional overlap.
+The patch list comes from the template's ``templates`` records (an
+`lsst.images.DifferenceImage` template) or ``coaddInputs`` records (a legacy
+template), so it is the set of patches that supplied *valid pixels* (stricter than a
+skymap overlap lookup), and the printed legend gives each patch's fractional overlap.
+An `lsst.images` template records the butler ID of each coadd, so the coadds are found
+whatever their dataset type; for a legacy template, pass ``coadd_dataset`` if the
+coadds are not called ``template_coadd`` (``goodSeeingCoadd`` in older repos).
 
 .. code-block:: python
 

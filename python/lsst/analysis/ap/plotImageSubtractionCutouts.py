@@ -45,6 +45,7 @@ import numpy as np
 import pandas as pd
 
 from . import apdb
+from .imageUtils import as_exposure, get_exposure
 
 _log = logging.getLogger(__name__)
 
@@ -92,10 +93,11 @@ class _ButlerCache:
         -------
         exposures : `tuple` [`lsst.afw.image.ExposureF`]
             Science, template, and difference exposure for this data id.
+            Images stored as `lsst.images` types are converted.
         """
         data_id = {'instrument': instrument, 'detector': detector, 'visit': visit}
         try:
-            science = self._butler.get(self._config.science_image_type, data_id)
+            science = get_exposure(self._butler, self._config.science_image_type, data_id)
         except DatasetNotFoundError as e:
             _log.error(f"Cannot load {self._config.science_image_type} with data_id {data_id}: {e}")
             _log.error("If you are working with data processed earlier than May 2025, try setting "
@@ -103,11 +105,12 @@ class _ButlerCache:
             raise
 
         if self._config.diff_image_type is not None:
-            template = self._butler.get(f"{self._config.diff_image_type}_templateExp", data_id)
-            difference = self._butler.get(f"{self._config.diff_image_type}_differenceExp", data_id)
+            template = get_exposure(self._butler, f"{self._config.diff_image_type}_templateExp", data_id)
+            difference = get_exposure(self._butler, f"{self._config.diff_image_type}_differenceExp",
+                                      data_id)
         else:
-            template = self._butler.get("template_detector", data_id)
-            difference = self._butler.get("difference_image", data_id)
+            template = get_exposure(self._butler, "template_detector", data_id)
+            difference = get_exposure(self._butler, "difference_image", data_id)
 
         return science, template, difference
 
@@ -384,11 +387,11 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
 
         Parameters
         ----------
-        science : `lsst.afw.image.ExposureF`
+        science : `lsst.afw.image.ExposureF` or `lsst.images.VisitImage`
             Science exposure to include in the cutout.
-        template : `lsst.afw.image.ExposureF`
+        template : `lsst.afw.image.ExposureF` or `lsst.images.VisitImage`
             Matched template exposure to include in the cutout.
-        difference : `lsst.afw.image.ExposureF`
+        difference : `lsst.afw.image.ExposureF` or `lsst.images.VisitImage`
              Matched science minus template exposure to include in the cutout.
         center : `lsst.geom.SpherePoint`
             Center of the source to be cut out of each image.
@@ -409,6 +412,7 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         image: `io.BytesIO`
             The generated image, to be output to a file or displayed on screen.
         """
+        science, template, difference = (as_exposure(image) for image in (science, template, difference))
         numpy_cutouts = {}
         if not self.config.use_footprint:
             sizes = self.config.sizes

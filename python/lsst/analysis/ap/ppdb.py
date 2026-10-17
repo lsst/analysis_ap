@@ -76,6 +76,7 @@ import pyvo
 import requests
 
 import lsst.geom
+from lsst.images import VisitImage
 from lsst.pipe.tasks.schemaUtils import readSdmSchemaFile
 
 _log = logging.getLogger(__name__)
@@ -141,7 +142,7 @@ def region_from_exposure(exposure, padding=DEFAULT_PADDING_ARCSEC):
 
     Parameters
     ----------
-    exposure : `lsst.afw.image.Exposure`
+    exposure : `lsst.afw.image.Exposure` or `lsst.images.VisitImage`
         Exposure whose WCS and bounding box define the region.
     padding : `float`, optional
         Margin to add around the footprint, in arcseconds.
@@ -163,10 +164,15 @@ def region_from_exposure(exposure, padding=DEFAULT_PADDING_ARCSEC):
     """
     if padding < 0:
         raise ValueError(f"padding must be non-negative, got {padding}")
-    wcs = exposure.getWcs()
+    if isinstance(exposure, VisitImage):
+        projection = exposure.sky_projection
+        wcs = None if projection is None else projection.to_legacy()
+        bbox = exposure.bbox.to_legacy()
+    else:
+        wcs = exposure.getWcs()
+        bbox = exposure.getBBox()
     if wcs is None:
         raise ValueError("Exposure has no WCS; cannot compute a sky region.")
-    bbox = exposure.getBBox()
     if bbox.isEmpty():
         raise ValueError("Exposure has an empty bounding box.")
 
@@ -391,7 +397,8 @@ class PpdbTap:
         ra, dec, radius : `float`, optional
             Cone-search center and radius, in degrees. All three must be
             given together; mutually exclusive with ``exposure``.
-        exposure : `lsst.afw.image.Exposure`, optional
+        exposure : `lsst.afw.image.Exposure` or `lsst.images.VisitImage`, \
+                optional
             Load objects covering this exposure's footprint (see
             `region_from_exposure`). Mutually exclusive with
             ``ra``/``dec``/``radius``.
@@ -680,7 +687,8 @@ class PpdbTap:
         ra, dec, radius : `float`, optional
             Cone center and radius, in degrees; mutually exclusive with
             ``exposure``. The radius is applied to *object* positions.
-        exposure : `lsst.afw.image.Exposure`, optional
+        exposure : `lsst.afw.image.Exposure` or `lsst.images.VisitImage`, \
+                optional
             Load sources for objects covering this exposure's footprint.
         padding : `float`, optional
             Margin around the exposure footprint, in arcseconds.
