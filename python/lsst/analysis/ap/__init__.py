@@ -28,6 +28,7 @@ from .plotImageSubtractionCutouts import *
 from .plotDiaSourceLightcurve import *
 from .apdbReconstruct import *
 from .compare import *
+from .compareDiaSources import *
 from .imageQA import *
 from .imageUtils import *
 from .spatiallySampledMetricsQA import *

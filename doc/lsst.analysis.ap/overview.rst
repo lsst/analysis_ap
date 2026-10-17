@@ -44,6 +44,9 @@ Both are available as command-line scripts.
 locked frames with every AP catalog overlaid, and a family of ``compare_*`` /
 ``*_sharing_sources`` functions diffs two APDBs against each other to find
 association changes.
+:doc:`compareDiaSources <compare-dia-sources>` matches the diaSources of two
+runs from their butler tables, for runs without an APDB, and explains each
+source found in only one run.
 
 **Run diagnostics.**
 :doc:`taskRuntimes <runtimes>` summarizes per-task wall time and peak memory from the
@@ -125,6 +128,7 @@ Where to go next
 
 - :doc:`notebook-tools` — display images with catalog overlays; compare two APDBs.
 - :doc:`cutouts` — generate diaSource cutout PNGs, with or without lightcurves.
+- :doc:`compare-dia-sources`: match the diaSources of two runs without an APDB.
 - :doc:`ppdb` — query the PPDB over TAP and map its contents on the sky.
 - :doc:`runtimes` — profile a pipeline run's task runtimes and memory.
 - :doc:`template-inputs` — find the input images and epochs of a diaSource's template.
