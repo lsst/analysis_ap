@@ -19,10 +19,11 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""Tests of analysis_ap functions reading images in the `lsst.images`
-format.
+"""Tests of reading AP images as `lsst.images` types, and of the functions
+that use them.
 """
 
+import collections
 import unittest
 import uuid
 from unittest import mock
@@ -40,9 +41,14 @@ import lsst.daf.base as dafBase
 import lsst.geom
 import lsst.utils.tests
 from lsst.analysis.ap import imageQA, nb_utils, plotImageSubtractionCutouts, ppdb
-from lsst.analysis.ap.imageUtils import as_exposure, get_exposure
-from lsst.daf.butler import DimensionUniverse, Timespan
-from lsst.images import Box, DifferenceImage, DifferenceImageTemplateInfo, Polygon, VisitImage
+from lsst.analysis.ap.imageUtils import (
+    _pixel_to_sky, _sky_to_pixel, as_masked_image, as_visit_image, cutout, cutout_box, get_visit_image,
+    pixel_scale,
+)
+from lsst.daf.butler import DatasetNotFoundError, DimensionUniverse, Timespan
+from lsst.images import (
+    Box, DifferenceImage, DifferenceImageTemplateInfo, MaskedImage, NoOverlapError, Polygon, VisitImage,
+)
 
 SKY_CENTER = lsst.geom.SpherePoint(45.0, 30.0, lsst.geom.degrees)
 
@@ -75,7 +81,7 @@ def make_exposure(seed=1):
 
 
 def make_exposure_record():
-    """Make the ``exposure`` dimension record that conversion needs."""
+    """Make the ``exposure`` dimension record of the test exposure."""
     begin = astropy.time.Time(60815.0, format="mjd", scale="tai")
     return DimensionUniverse()["exposure"].RecordClass(
         instrument="testCam", id=12345, obs_id="test_12345", group="12345", day_obs=20250520,
@@ -85,64 +91,177 @@ def make_exposure_record():
     )
 
 
-def to_native(exposure, image_type=DifferenceImage):
-    """Convert a legacy exposure to an `lsst.images` type."""
-    return image_type.from_legacy(exposure, exposure_record=make_exposure_record(), unit=u.nJy)
+FakeRef = collections.namedtuple("FakeRef", ["name", "dataId"])
 
 
 class FakeButler:
-    """Butler stand-in that returns fixed objects by dataset name."""
+    """Butler stand-in that returns fixed objects by dataset name.
 
-    def __init__(self, datasets):
+    Component reads (``"<dataset>.<component>"``) return that attribute of
+    the legacy exposure or `lsst.images` image stored under ``<dataset>``.
+    """
+
+    def __init__(self, datasets, record=None):
         self.datasets = datasets
+        self.record = record
+        self.record_queries = []
 
-    def get(self, name, *args, **kwargs):
+    def find_dataset(self, name, data_id=None, **kwargs):
+        return FakeRef(name, data_id) if name in self.datasets else None
+
+    def get(self, target, *args, **kwargs):
+        name = target.name if isinstance(target, FakeRef) else target
+        if "." in name:
+            parent, component = name.split(".")
+            dataset = self.datasets[parent]
+            if isinstance(dataset, afwImage.Exposure):
+                return {"detector": dataset.getDetector, "bbox": dataset.getBBox}[component]()
+            return getattr(dataset, component)
         return self.datasets[name]
 
+    def query_dimension_records(self, element, data_id=None, explain=True):
+        self.record_queries.append(data_id)
+        return [self.record] if self.record is not None else []
 
-class AsExposureTestCase(lsst.utils.tests.TestCase):
+
+class AsVisitImageTestCase(lsst.utils.tests.TestCase):
     def setUp(self):
         self.exposure = make_exposure()
 
-    def testLegacy(self):
-        self.assertIs(as_exposure(self.exposure), self.exposure)
+    def testNativePassesThrough(self):
+        image = as_visit_image(self.exposure, image_type="difference")
+        self.assertIs(as_visit_image(image), image)
+        self.assertIs(as_masked_image(image), image)
 
-    def testNative(self):
-        for image_type in (VisitImage, DifferenceImage):
-            with self.subTest(image_type=image_type.__name__):
-                converted = as_exposure(to_native(self.exposure, image_type))
-                self.assertIsInstance(converted, afwImage.ExposureF)
-                self.assertEqual(converted.getBBox(), self.exposure.getBBox())
-                self.assertImagesEqual(converted.image, self.exposure.image)
-                self.assertImagesEqual(converted.variance, self.exposure.variance)
-                self.assertMasksEqual(converted.mask, self.exposure.mask)
-                self.assertEqual(converted.filter, self.exposure.filter)
-                self.assertIsNotNone(converted.wcs)
+    def testRoles(self):
+        for image_type, image_class in [("science", VisitImage), ("template", DifferenceImage),
+                                        ("difference", DifferenceImage)]:
+            with self.subTest(image_type=image_type):
+                image = as_visit_image(self.exposure, image_type=image_type,
+                                       exposure_record=make_exposure_record())
+                self.assertIs(type(image), image_class)
+                self.assertEqual(image.bbox, Box.from_legacy(self.exposure.getBBox()))
+                np.testing.assert_array_equal(image.image.array, self.exposure.image.array)
+                np.testing.assert_array_equal(image.variance.array, self.exposure.variance.array)
+                bad = self.exposure.mask.array == self.exposure.mask.getPlaneBitMask("BAD")
+                np.testing.assert_array_equal(image.mask.get("BAD"), bad)
+                self.assertEqual(image.band, "g")
+
+    def testUnits(self):
+        self.assertEqual(as_visit_image(self.exposure).unit, u.nJy)
+        self.exposure.setPhotoCalib(afwImage.PhotoCalib(57.5))
+        image = as_visit_image(self.exposure)
+        self.assertEqual(image.unit, u.electron)
+        self.assertIsNotNone(image.photometric_scaling)
+        self.exposure.metadata["BUNIT"] = "nJy"
+        self.assertEqual(as_visit_image(self.exposure).unit, u.nJy)
+        # The caller's metadata is left alone, so a second conversion works.
+        self.assertEqual(self.exposure.metadata["BUNIT"], "nJy")
+        self.assertEqual(as_visit_image(self.exposure).unit, u.nJy)
+
+    def testTemplateDetector(self):
+        detector = self.exposure.getDetector()
+        self.exposure.setDetector(None)
+        with self.assertRaisesRegex(ValueError, "no detector"):
+            as_visit_image(self.exposure, image_type="template")
+        native_detector = as_visit_image(make_exposure()).detector
+        for given in (detector, native_detector):
+            image = as_visit_image(self.exposure, image_type="template", detector=given)
+            self.assertEqual(image.detector.to_legacy().getId(), detector.getId())
+        self.assertIsNone(self.exposure.getDetector())
 
     def testUnsupported(self):
         with self.assertRaises(TypeError):
-            as_exposure(self.exposure.maskedImage)
+            as_visit_image(self.exposure.maskedImage)
+        with self.assertRaises(TypeError):
+            as_masked_image(self.exposure.maskedImage)
 
-    def testGetExposure(self):
-        butler = FakeButler({"difference_image": to_native(self.exposure)})
-        self.assertIsInstance(get_exposure(butler, "difference_image", {"visit": 1}), afwImage.ExposureF)
+    def testMaskedImage(self):
+        # A post-ISR image has no PSF or WCS.
+        self.exposure.setPsf(None)
+        self.exposure.setWcs(None)
+        image = as_masked_image(self.exposure)
+        self.assertIs(type(image), MaskedImage)
+        np.testing.assert_array_equal(image.image.array, self.exposure.image.array)
+        self.assertEqual(int(image.mask.get("BAD").sum()), 200)
+
+
+class GetVisitImageTestCase(lsst.utils.tests.TestCase):
+    def setUp(self):
+        self.exposure = make_exposure()
+        self.record = make_exposure_record()
+
+    def testLegacy(self):
+        butler = FakeButler({"difference_image": self.exposure}, record=self.record)
+        image = get_visit_image(butler, "difference_image", {"visit": 12345}, image_type="difference")
+        self.assertIsInstance(image, DifferenceImage)
+        self.assertEqual(butler.record_queries, [{"visit": 12345}])
+        self.assertEqual(image.obs_info.exposure_time, 30.0*u.s)
+
+    def testNative(self):
+        native = as_visit_image(self.exposure, image_type="difference")
+        butler = FakeButler({"difference_image": native})
+        self.assertIs(get_visit_image(butler, "difference_image", {"visit": 1}), native)
+        self.assertEqual(butler.record_queries, [])
+
+    def testMissing(self):
+        with self.assertRaises(DatasetNotFoundError):
+            get_visit_image(FakeButler({}), "difference_image", {"visit": 1})
+
+
+class CutoutTestCase(lsst.utils.tests.TestCase):
+    def setUp(self):
+        self.exposure = make_exposure()
+        self.image = as_visit_image(self.exposure)
+
+    def testMatchesLegacyCutout(self):
+        # Inside the image, and across a corner, where the cutout is padded.
+        for x, y in [(100.3, 80.7), (101.0, 60.0), (1.2, 2.6)]:
+            with self.subTest(x=x, y=y):
+                center = self.exposure.wcs.pixelToSky(x, y)
+                legacy = self.exposure.getCutout(center, lsst.geom.Extent2I(9, 9))
+                stamp = cutout(self.image, center, 9)
+                self.assertEqual(stamp.bbox, Box.from_legacy(legacy.getBBox()))
+                np.testing.assert_array_equal(stamp.array, legacy.image.array)
+
+    def testOffImage(self):
+        far = self.exposure.wcs.pixelToSky(-500.0, -500.0)
+        with self.assertRaises(NoOverlapError):
+            cutout(self.image, far, 9)
+
+    def testCutoutBox(self):
+        box = Box.from_legacy(lsst.geom.Box2I(lsst.geom.Point2I(5, 7), lsst.geom.Extent2I(10, 12)))
+        np.testing.assert_array_equal(cutout_box(self.image, box).array,
+                                      self.exposure.image[box.to_legacy()].array)
+
+    def testPixelScale(self):
+        expected = self.exposure.wcs.getPixelScale(self.exposure.getBBox().getCenter()).asArcseconds()
+        self.assertAlmostEqual(pixel_scale(self.image), expected, places=9)
+
+    def testSkyPixelTransforms(self):
+        x, y = np.array([3.0, 150.5]), np.array([9.0, 40.25])
+        ra, dec = _pixel_to_sky(self.image.sky_projection, x, y)
+        np.testing.assert_allclose((ra, dec), _pixel_to_sky(self.exposure.wcs, x, y), rtol=0, atol=1e-10)
+        for wcs in (self.image.sky_projection, self.exposure.wcs):
+            np.testing.assert_allclose(_sky_to_pixel(wcs, ra, dec), (x, y), rtol=0, atol=1e-6)
 
 
 class NativeImageFunctionsTestCase(lsst.utils.tests.TestCase):
     """Test that functions give the same result for a legacy image and its
-    `lsst.images` conversion.
+    `lsst.images` form.
     """
 
     def setUp(self):
         self.legacy = make_exposure()
-        self.native = to_native(self.legacy)
+        self.native = as_visit_image(self.legacy, image_type="difference")
 
     def testImageDiffStats(self):
         legacy = imageQA.image_diff_stats(FakeButler({"difference_image": self.legacy}), 1, 2)
         native = imageQA.image_diff_stats(FakeButler({"difference_image": self.native}), 1, 2)
         self.assertEqual(native, legacy)
-        self.assertEqual(legacy["frac_BAD"], 200/self.legacy.image.array.size)
-        self.assertEqual(legacy["frac_DETECTED"], 10/self.legacy.image.array.size)
+        n_pixels = self.legacy.image.array.size
+        self.assertEqual(legacy["frac_BAD"], 200/n_pixels)
+        self.assertEqual(legacy["frac_DETECTED"], 10/n_pixels)
 
     def testPixelCompare(self):
         result = imageQA.pixel_compare(FakeButler({"difference_image": self.legacy}),
@@ -150,26 +269,56 @@ class NativeImageFunctionsTestCase(lsst.utils.tests.TestCase):
         self.assertEqual(result.summary["diff_stddev"], 0.0)
         self.assertEqual(result.summary["n_mask_pixels_changed"], 0)
 
+    def testMaskDifference(self):
+        other = make_exposure()
+        other.mask.array[0, 0] |= other.mask.getPlaneBitMask("SAT")
+        other = as_visit_image(other)
+        differ = imageQA._mask_difference(self.native.mask, other.mask)
+        self.assertEqual(int(differ.sum()), 1)
+        self.assertTrue(differ[0, 0])
+
     def testRegionFromExposure(self):
-        legacy = ppdb.region_from_exposure(self.legacy)
-        native = ppdb.region_from_exposure(self.native)
-        np.testing.assert_allclose(native, legacy, rtol=0, atol=1e-12)
+        bbox = self.legacy.getBBox()
+        center = self.legacy.wcs.pixelToSky(bbox.getCenter())
+        radius = max(center.separation(self.legacy.wcs.pixelToSky(lsst.geom.Point2D(corner)))
+                     for corner in bbox.getCorners()) + 5*lsst.geom.arcseconds
+        expected = (center.getRa().asDegrees(), center.getDec().asDegrees(), radius.asDegrees())
+        for image in (self.native, self.legacy):
+            np.testing.assert_allclose(ppdb.region_from_exposure(image, padding=5.0), expected,
+                                       rtol=0, atol=1e-10)
 
     def testGenerateImage(self):
         task = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask(output_path="")
-        cutout = task.generate_image(self.native, self.native, self.native, SKY_CENTER, 0.2)
-        with PIL.Image.open(cutout) as image:
+        legacy_template = make_exposure(seed=2)
+        legacy_template.setDetector(None)
+        # A legacy template is given the science image's detector.
+        stamp = task.generate_image(self.legacy, legacy_template, self.native, SKY_CENTER, 0.2)
+        with PIL.Image.open(stamp) as image:
             self.assertGreater(image.width, 0)
 
     def testButlerCache(self):
         config = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsConfig()
         config.diff_image_type = None
-        butler = FakeButler({"preliminary_visit_image": to_native(self.legacy, VisitImage),
-                             "template_detector": self.native,
+        legacy_template = make_exposure(seed=2)
+        legacy_template.setDetector(None)
+        butler = FakeButler({"preliminary_visit_image": self.legacy,
+                             "template_detector": legacy_template,
                              "difference_image": self.native})
         plotImageSubtractionCutouts.butler_cache.set(butler, config)
-        for exposure in plotImageSubtractionCutouts.butler_cache.get_exposures("testCam", 2, 1):
-            self.assertIsInstance(exposure, afwImage.ExposureF)
+        science, template, difference = plotImageSubtractionCutouts.butler_cache.get_images("testCam", 2, 1)
+        self.assertIs(type(science), VisitImage)
+        self.assertIs(type(template), DifferenceImage)
+        self.assertIs(difference, self.native)
+
+    def testLoadCutout(self):
+        butler = FakeButler({"preliminary_visit_image": self.legacy, "difference_image": self.native})
+        row = mock.Mock(visit=1, detector=2, ra=SKY_CENTER.getRa().asDegrees(),
+                        dec=SKY_CENTER.getDec().asDegrees())
+        data = nb_utils._load_cutout(butler, row, size=15, image_type="difference",
+                                     image_datasets=nb_utils._IMAGE_DATASETS)
+        legacy = self.legacy.getCutout(SKY_CENTER, lsst.geom.Extent2I(15, 15))
+        np.testing.assert_array_equal(data["data"], legacy.image.array)
+        self.assertEqual((data["x0"], data["y0"]), (legacy.getX0(), legacy.getY0()))
 
 
 class TemplatePatchOutlinesTestCase(lsst.utils.tests.TestCase):
@@ -178,8 +327,10 @@ class TemplatePatchOutlinesTestCase(lsst.utils.tests.TestCase):
     """
 
     def setUp(self):
-        self.wcs = afwGeom.makeSkyWcs(lsst.geom.Point2D(0.0, 0.0), SKY_CENTER,
-                                      afwGeom.makeCdMatrix(0.2*lsst.geom.arcseconds))
+        exposure = make_exposure()
+        # The coadd of patch 0 shares the difference image's pixel grid.
+        self.coadd_wcs = exposure.wcs
+        self.sky_projection = as_visit_image(exposure).sky_projection
         self.ids = [uuid.uuid4(), uuid.uuid4()]
         # Listed out of order, to check that the outlines are sorted.
         self.templates = [
@@ -190,14 +341,13 @@ class TemplatePatchOutlinesTestCase(lsst.utils.tests.TestCase):
             )
             for patch, dataset_id, x0 in [(1, self.ids[1], 40), (0, self.ids[0], 0)]
         ]
-        # The coadd of patch 0 shares the difference image's pixel grid.
         self.coadd_bbox = lsst.geom.Box2I(lsst.geom.Point2I(-10, -20), lsst.geom.Extent2I(70, 140))
         self.ref = mock.MagicMock()
         self.ref.datasetType.storageClass.allComponents.return_value = {"wcs": None, "bbox": None}
         self.ref.makeComponentRef.side_effect = lambda component: component
 
         def get(target, *args, storageClass=None):
-            return {"template_detector.templates": self.templates, "wcs": self.wcs,
+            return {"template_detector.templates": self.templates, "wcs": self.coadd_wcs,
                     "bbox": self.coadd_bbox}[target]
 
         self.butler = mock.MagicMock()
@@ -209,7 +359,7 @@ class TemplatePatchOutlinesTestCase(lsst.utils.tests.TestCase):
 
     def testOutlines(self):
         outlines, refs = nb_utils._template_patch_outlines(
-            self.butler, "template_detector", {"visit": 1, "detector": 2}, self.wcs,
+            self.butler, "template_detector", {"visit": 1, "detector": 2}, self.sky_projection,
             coadd_dataset="unused", band="g")
         self.assertEqual(list(outlines), [(1, 0), (1, 1)])
         self.assertEqual(refs, {(1, 0): self.ref})

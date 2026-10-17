@@ -72,12 +72,14 @@ import time
 from importlib.resources import files
 
 import astropy.table
+import astropy.units
 import pyvo
 import requests
+from astropy.coordinates import SkyCoord
 
-import lsst.geom
-from lsst.images import VisitImage
 from lsst.pipe.tasks.schemaUtils import readSdmSchemaFile
+
+from .imageUtils import _pixel_to_sky, as_masked_image
 
 _log = logging.getLogger(__name__)
 
@@ -142,8 +144,10 @@ def region_from_exposure(exposure, padding=DEFAULT_PADDING_ARCSEC):
 
     Parameters
     ----------
-    exposure : `lsst.afw.image.Exposure` or `lsst.images.VisitImage`
-        Exposure whose WCS and bounding box define the region.
+    exposure : `lsst.images.MaskedImage` or `lsst.afw.image.Exposure`
+        Image whose sky projection and bounding box define the region, such
+        as an `lsst.images.VisitImage`. A legacy exposure is converted with
+        `as_masked_image`.
     padding : `float`, optional
         Margin to add around the footprint, in arcseconds.
 
@@ -159,31 +163,23 @@ def region_from_exposure(exposure, padding=DEFAULT_PADDING_ARCSEC):
     Raises
     ------
     ValueError
-        If the exposure has no WCS, an empty bounding box, or negative
-        padding.
+        If the image has no WCS, or ``padding`` is negative.
     """
     if padding < 0:
         raise ValueError(f"padding must be non-negative, got {padding}")
-    if isinstance(exposure, VisitImage):
-        projection = exposure.sky_projection
-        wcs = None if projection is None else projection.to_legacy()
-        bbox = exposure.bbox.to_legacy()
-    else:
-        wcs = exposure.getWcs()
-        bbox = exposure.getBBox()
-    if wcs is None:
-        raise ValueError("Exposure has no WCS; cannot compute a sky region.")
-    if bbox.isEmpty():
-        raise ValueError("Exposure has an empty bounding box.")
-
-    center = wcs.pixelToSky(bbox.getCenter())
-    corners = [wcs.pixelToSky(lsst.geom.Point2D(corner))
-               for corner in bbox.getCorners()]
-    radius = max(center.separation(corner) for corner in corners)
-    radius = radius + padding * lsst.geom.arcseconds
-    return (center.getRa().asDegrees(),
-            center.getDec().asDegrees(),
-            radius.asDegrees())
+    image = as_masked_image(exposure)
+    if image.sky_projection is None:
+        raise ValueError("Image has no WCS; cannot compute a sky region.")
+    bbox = image.bbox
+    x_min, x_max = bbox.x.start, bbox.x.stop - 1
+    y_min, y_max = bbox.y.start, bbox.y.stop - 1
+    # The center first, then the centers of the four corner pixels.
+    ra, dec = _pixel_to_sky(image.sky_projection,
+                            [0.5*(x_min + x_max), x_min, x_max, x_max, x_min],
+                            [0.5*(y_min + y_max), y_min, y_min, y_max, y_max])
+    points = SkyCoord(ra, dec, unit="deg")
+    radius = points[0].separation(points[1:]).max() + padding*astropy.units.arcsec
+    return float(ra[0]), float(dec[0]), float(radius.deg)
 
 
 @dataclasses.dataclass
@@ -397,7 +393,7 @@ class PpdbTap:
         ra, dec, radius : `float`, optional
             Cone-search center and radius, in degrees. All three must be
             given together; mutually exclusive with ``exposure``.
-        exposure : `lsst.afw.image.Exposure` or `lsst.images.VisitImage`, \
+        exposure : `lsst.images.MaskedImage` or `lsst.afw.image.Exposure`, \
                 optional
             Load objects covering this exposure's footprint (see
             `region_from_exposure`). Mutually exclusive with
@@ -687,7 +683,7 @@ class PpdbTap:
         ra, dec, radius : `float`, optional
             Cone center and radius, in degrees; mutually exclusive with
             ``exposure``. The radius is applied to *object* positions.
-        exposure : `lsst.afw.image.Exposure` or `lsst.images.VisitImage`, \
+        exposure : `lsst.images.MaskedImage` or `lsst.afw.image.Exposure`, \
                 optional
             Load sources for objects covering this exposure's footprint.
         padding : `float`, optional

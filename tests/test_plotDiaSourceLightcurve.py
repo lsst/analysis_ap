@@ -33,7 +33,7 @@ from lsst.analysis.ap import plotDiaSourceLightcurve
 
 # Pull in the DATA fixture from the cutouts test so we get the full set of
 # flag columns expected by _annotate_image.
-from test_plotImageSubtractionCutouts import DATA, skyCenter
+from test_plotImageSubtractionCutouts import DATA, make_test_images, skyCenter
 
 
 DIA_OBJECT_ID = 999999999999000001
@@ -86,15 +86,8 @@ class TestPlotDiaSourceLightcurve(lsst.utils.tests.TestCase):
     """Tests for PlotDiaSourceLightcurveTask."""
 
     def setUp(self):
-        bbox = lsst.geom.Box2I(lsst.geom.Point2I(0, 0), lsst.geom.Point2I(100, 100))
-        self.centroid = lsst.geom.Point2D(50, 50)
-        dataset = lsst.meas.base.tests.TestDataset(bbox, crval=skyCenter)
         self.scale = 0.3
-        dataset.addSource(instFlux=1e5, centroid=self.centroid)
-        self.science, _ = dataset.realize(noise=1000.0, schema=dataset.makeMinimalSchema())
-        self.template, _ = dataset.realize(noise=5.0, schema=dataset.makeMinimalSchema())
-        self.difference = lsst.afw.image.ExposureF(self.science, deep=True)
-        self.difference.image -= self.template.image
+        _, self.science, self.template, self.difference = make_test_images()
         self.data = _augment_with_object_columns(DATA)
 
     def _make_task(self, sources=None, forced=None, **config_kwargs):

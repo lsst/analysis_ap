@@ -242,6 +242,7 @@ def cutout_grid(sources, butler, instrument, n_per_row=4, config=None, output=No
 
     # Local import to avoid a circular dependency at module load time.
     from . import plotImageSubtractionCutouts as cutouts_mod
+    from .imageUtils import pixel_scale
 
     if config is None:
         config = cutouts_mod.PlotImageSubtractionCutoutsConfig()
@@ -263,11 +264,11 @@ def cutout_grid(sources, butler, instrument, n_per_row=4, config=None, output=No
         ax = axes[row][col]
         ax.set_axis_off()
         try:
-            sci, tmpl, diff = cutouts_mod.butler_cache.get_exposures(
+            sci, tmpl, diff = cutouts_mod.butler_cache.get_images(
                 instrument, source[detector_column], source[visit_column])
             center = lsst.geom.SpherePoint(source[ra_column], source[dec_column],
                                            lsst.geom.degrees)
-            scale = sci.wcs.getPixelScale(sci.getBBox().getCenter()).asArcseconds()
+            scale = pixel_scale(sci)
             png = task.generate_image(
                 sci, tmpl, diff, center, scale,
                 source=source if config.add_metadata else None,

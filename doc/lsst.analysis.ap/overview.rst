@@ -65,12 +65,22 @@ Image formats
 AP image datasets are stored either as legacy afw exposures or as `lsst.images`
 types (`~lsst.images.VisitImage` and `~lsst.images.DifferenceImage`), depending on
 the pipeline that wrote them.
-The image tools accept both.
-They convert an `lsst.images` image to an afw exposure with `as_exposure` and work
-on that, so the mask planes keep their legacy names and a legacy run can be
-compared pixel by pixel with an `lsst.images` one.
-`as_exposure` and `get_exposure` (a butler read followed by `as_exposure`) are
-available for your own notebooks.
+The image tools work on the `lsst.images` types and convert a legacy exposure when
+they read it, with `get_visit_image`.
+The conversion needs the visit's ``exposure`` record, which is read from the butler,
+and a legacy template, which has no detector of its own, is given the science
+image's.
+Mask planes therefore carry their `lsst.images` names (``SATURATED`` rather than
+``SAT``, for example) whichever format the data were written in, and a legacy run
+can be compared pixel by pixel with an `lsst.images` one.
+
+Images sent to an afw display (`display_images` and the other ``display_*``
+functions) are converted back to afw exposures at that point, since
+`lsst.afw.display` accepts only those.
+
+`get_visit_image`, `as_visit_image`, `as_masked_image` (for images such as post-ISR
+images, which lack the PSF and other components of a visit image), `cutout` and
+`pixel_scale` are available for your own notebooks.
 
 .. _lsst.analysis.ap-overview-databases:
 
