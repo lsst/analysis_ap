@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 
 import astropy.units as u
-from astropy.coordinates import SkyCoord, match_coordinates_sky
+from astropy.coordinates import SkyCoord, match_coordinates_sky, search_around_sky
 
 
 def _as_arcsec(radius):
@@ -60,8 +60,41 @@ def _select_group(df, on, key):
     return df[mask]
 
 
+def _one_to_one_pairs(coords1, coords2, rad_arcsec):
+    """Pair two sets of positions one to one, closest pairs first.
+
+    Parameters
+    ----------
+    coords1, coords2 : `astropy.coordinates.SkyCoord`
+        Positions to pair; both non-empty arrays.
+    rad_arcsec : `float`
+        Maximum separation of a pair, in arcseconds.
+
+    Returns
+    -------
+    index1, index2 : `numpy.ndarray`
+        Indices into ``coords1`` and ``coords2`` of each pair.
+    sep_arcsec : `numpy.ndarray`
+        Separation of each pair, in arcseconds.
+    """
+    idx1, idx2, sep, _ = search_around_sky(coords1, coords2, rad_arcsec*u.arcsec)
+    sep = sep.to_value(u.arcsec)
+    # Ties are broken by index so the result does not depend on the order
+    # search_around_sky returns pairs in.
+    order = np.lexsort((idx2, idx1, sep))
+    used1, used2 = set(), set()
+    keep = []
+    for k in order:
+        if idx1[k] not in used1 and idx2[k] not in used2:
+            used1.add(idx1[k])
+            used2.add(idx2[k])
+            keep.append(k)
+    keep = np.array(keep, dtype=int)
+    return idx1[keep], idx2[keep], sep[keep]
+
+
 def match_catalogs(srcs1, srcs2, radius=0.5*u.arcsec, on=("visit", "detector"),
-                   ra_col="ra", dec_col="dec", id_col="diaSourceId"):
+                   ra_col="ra", dec_col="dec", id_col="diaSourceId", one_to_one=False):
     """Spatially cross-match two DiaSource-like DataFrames.
 
     Sources are first partitioned by the columns in
@@ -83,6 +116,12 @@ def match_catalogs(srcs1, srcs2, radius=0.5*u.arcsec, on=("visit", "detector"),
         Column names for sky coordinates, in degrees.
     id_col : `str`
         Column name for the source id in both catalogs.
+    one_to_one : `bool`, optional
+        If True, each source is in at most one pair: pairs within ``radius``
+        are taken in order of increasing separation, skipping any whose
+        sources are already paired. If False, each source in ``srcs1`` is
+        paired with its nearest neighbor in ``srcs2``, so several may share
+        one partner.
 
     Returns
     -------
@@ -118,13 +157,20 @@ def match_catalogs(srcs1, srcs2, radius=0.5*u.arcsec, on=("visit", "detector"),
                            dec=gs1[dec_col].values*u.deg)
         coords2 = SkyCoord(ra=gs2[ra_col].values*u.deg,
                            dec=gs2[dec_col].values*u.deg)
-        idx, sep, _ = match_coordinates_sky(coords1, coords2)
-
-        gs1["xmatch_dist_arcsec"] = sep.to_value(u.arcsec)
-        gs1[id2_col] = gs2[id_col].values[idx]
+        if one_to_one:
+            idx1, idx2, sep = _one_to_one_pairs(coords1, coords2, rad_arcsec)
+            gs1["xmatch_dist_arcsec"] = np.nan
+            gs1[id2_col] = pd.Series(pd.NA, index=gs1.index, dtype=object)
+            gs1.iloc[idx1, gs1.columns.get_loc("xmatch_dist_arcsec")] = sep
+            gs1.iloc[idx1, gs1.columns.get_loc(id2_col)] = gs2[id_col].values[idx2]
+        else:
+            idx, sep, _ = match_coordinates_sky(coords1, coords2)
+            gs1["xmatch_dist_arcsec"] = sep.to_value(u.arcsec)
+            gs1[id2_col] = gs2[id_col].values[idx]
 
         has_match = gs1["xmatch_dist_arcsec"] <= rad_arcsec
-        m = gs1[has_match]
+        m = gs1[has_match].copy()
+        m[id2_col] = m[id2_col].astype(gs2[id_col].dtype)
         u1 = gs1[~has_match].drop(columns=["xmatch_dist_arcsec", id2_col])
         u2 = gs2[~gs2[id_col].isin(set(m[id2_col]))]
 
