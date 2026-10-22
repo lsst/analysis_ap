@@ -107,6 +107,46 @@ class TestMatchCatalogs(lsst.utils.tests.TestCase):
         self.assertEqual(len(u2), 0)
 
 
+class TestOneToOneMatch(lsst.utils.tests.TestCase):
+    """Two sources in catalog 1 compete for the one source in catalog 2
+    that is nearest to both."""
+
+    def setUp(self):
+        arcsec = 1/3600
+        self.srcs1 = _make_frame([
+            {"diaSourceId": 1, "ra": 10.0, "dec": -5.0 + 0.3*arcsec},
+            {"diaSourceId": 2, "ra": 10.0, "dec": -5.0 - 0.1*arcsec},
+        ], visit=1, detector=0)
+        self.srcs2 = _make_frame([
+            {"diaSourceId": 11, "ra": 10.0, "dec": -5.0},
+            {"diaSourceId": 12, "ra": 10.0, "dec": -5.0 + 0.7*arcsec},
+        ], visit=1, detector=0)
+
+    def test_nearest_neighbor_shares_partner(self):
+        matched, _, unique2 = match_catalogs(self.srcs1, self.srcs2, radius=1*u.arcsec)
+        self.assertEqual(list(matched["diaSourceId_2"]), [11, 11])
+        self.assertEqual(list(unique2["diaSourceId"]), [12])
+
+    def test_one_to_one(self):
+        matched, unique1, unique2 = match_catalogs(self.srcs1, self.srcs2, radius=1*u.arcsec,
+                                                   one_to_one=True)
+        # The closest pair (2, 11) is taken first, leaving 1 with 12.
+        self.assertEqual(dict(zip(matched["diaSourceId"], matched["diaSourceId_2"])), {1: 12, 2: 11})
+        self.assertEqual(matched["diaSourceId_2"].dtype, self.srcs2["diaSourceId"].dtype)
+        np.testing.assert_allclose(matched.set_index("diaSourceId")["xmatch_dist_arcsec"],
+                                   [0.4, 0.1], atol=1e-6)
+        self.assertEqual(len(unique1), 0)
+        self.assertEqual(len(unique2), 0)
+
+    def test_one_to_one_radius(self):
+        matched, unique1, unique2 = match_catalogs(self.srcs1, self.srcs2, radius=0.2*u.arcsec,
+                                                   one_to_one=True)
+        self.assertEqual(list(matched["diaSourceId"]), [2])
+        self.assertEqual(list(unique1["diaSourceId"]), [1])
+        self.assertEqual(list(unique2["diaSourceId"]), [12])
+        self.assertNotIn("xmatch_dist_arcsec", unique1.columns)
+
+
 class TestFluxResiduals(lsst.utils.tests.TestCase):
     """`flux_residuals` joins matched pairs with catalog 2 to compute
     flux differences in units of sigma."""

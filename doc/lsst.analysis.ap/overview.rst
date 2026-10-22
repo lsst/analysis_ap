@@ -44,6 +44,9 @@ Both are available as command-line scripts.
 locked frames with every AP catalog overlaid, and a family of ``compare_*`` /
 ``*_sharing_sources`` functions diffs two APDBs against each other to find
 association changes.
+:doc:`compareDiaSources <compare-dia-sources>` matches the diaSources of two
+runs from their butler tables, for runs without an APDB, and explains each
+source found in only one run.
 
 **Run diagnostics.**
 :doc:`taskRuntimes <runtimes>` summarizes per-task wall time and peak memory from the
@@ -56,6 +59,31 @@ into readable timestamped lines.
 Several other modules (``compare``, ``imageQA``, ``plotUtils``,
 ``spatiallySampledMetricsQA``, ``apdbReconstruct``, ``skymapOverlay``) provide
 supporting pieces; see the :ref:`Python API reference <lsst.analysis.ap-pyapi>`.
+
+.. _lsst.analysis.ap-overview-image-formats:
+
+Image formats
+=============
+
+AP image datasets are stored either as legacy afw exposures or as `lsst.images`
+types (`~lsst.images.VisitImage` and `~lsst.images.DifferenceImage`), depending on
+the pipeline that wrote them.
+The image tools work on the `lsst.images` types and convert a legacy exposure when
+they read it, with `get_visit_image`.
+The conversion needs the visit's ``exposure`` record, which is read from the butler,
+and a legacy template, which has no detector of its own, is given the science
+image's.
+Mask planes therefore carry their `lsst.images` names (``SATURATED`` rather than
+``SAT``, for example) whichever format the data were written in, and a legacy run
+can be compared pixel by pixel with an `lsst.images` one.
+
+Images sent to an afw display (`display_images` and the other ``display_*``
+functions) are converted back to afw exposures at that point, since
+`lsst.afw.display` accepts only those.
+
+`get_visit_image`, `as_visit_image`, `as_masked_image` (for images such as post-ISR
+images, which lack the PSF and other components of a visit image), `cutout` and
+`pixel_scale` are available for your own notebooks.
 
 .. _lsst.analysis.ap-overview-databases:
 
@@ -100,6 +128,7 @@ Where to go next
 
 - :doc:`notebook-tools` — display images with catalog overlays; compare two APDBs.
 - :doc:`cutouts` — generate diaSource cutout PNGs, with or without lightcurves.
+- :doc:`compare-dia-sources`: match the diaSources of two runs without an APDB.
 - :doc:`ppdb` — query the PPDB over TAP and map its contents on the sky.
 - :doc:`runtimes` — profile a pipeline run's task runtimes and memory.
 - :doc:`template-inputs` — find the input images and epochs of a diaSource's template.

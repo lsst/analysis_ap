@@ -26,7 +26,8 @@ Two utilities live here:
 - `image_diff_stats` reports basic statistics (median, MAD, stdev, kurtosis,
   mask-plane fractions) of a single difference image.
 - `pixel_compare` aligns two difference images for the same data id and
-  returns their pixel-wise difference, ratio, mask XOR, and a small summary.
+  returns their pixel-wise difference, ratio, mask differences, and a small
+  summary.
 
 Both are intended for human-driven analysis from a notebook. The first is
 also designed to be mapped over a list of dataIds to produce a per-detector
@@ -42,6 +43,8 @@ from typing import Iterable, Mapping
 
 import numpy as np
 import pandas as pd
+
+from .imageUtils import get_visit_image
 
 
 def _finite_view(array):
@@ -71,11 +74,11 @@ def _basic_stats(array):
 
 
 def _mask_plane_fractions(mask):
-    """Return ``{plane_name: fraction_of_pixels_set}`` for an afw mask.
+    """Return ``{"frac_<plane>": fraction_of_pixels_set}`` for a mask.
 
     Parameters
     ----------
-    mask : `lsst.afw.image.Mask`
+    mask : `lsst.images.Mask`
         The mask whose planes are to be summed.
 
     Returns
@@ -83,15 +86,33 @@ def _mask_plane_fractions(mask):
     fractions : `dict` [`str`, `float`]
         Per-plane fraction of pixels where that plane bit is set.
     """
-    arr = mask.array
-    npix = arr.size
-    if npix == 0:
+    if mask.bbox.area == 0:
         return {}
-    out = {}
-    for plane_name, plane_bit in mask.getMaskPlaneDict().items():
-        bitmask = np.uint64(1) << np.uint64(plane_bit)
-        out[f"frac_{plane_name}"] = float(np.sum((arr & bitmask) != 0) / npix)
-    return out
+    return {f"frac_{name}": float(np.mean(mask.get(name))) for name in mask.schema.names}
+
+
+def _mask_difference(mask1, mask2):
+    """Return where two masks differ in any plane.
+
+    Planes are matched by name; a plane absent from one mask counts as unset
+    there.
+
+    Parameters
+    ----------
+    mask1, mask2 : `lsst.images.Mask`
+        Masks with the same shape.
+
+    Returns
+    -------
+    differ : `numpy.ndarray` [`bool`]
+        True where at least one plane is set in only one mask.
+    """
+    differ = np.zeros(mask1.bbox.shape, dtype=bool)
+    for name in set(mask1.schema.names) | set(mask2.schema.names):
+        set1 = mask1.get(name) if name in mask1.schema.names else False
+        set2 = mask2.get(name) if name in mask2.schema.names else False
+        differ |= set1 != set2
+    return differ
 
 
 def image_diff_stats(butler, visit, detector, dataset_name="difference_image"):
@@ -110,9 +131,11 @@ def image_diff_stats(butler, visit, detector, dataset_name="difference_image"):
     -------
     stats : `dict`
         ``{"visit", "detector", "median", "mad", "stddev", "kurtosis"}`` plus
-        a ``frac_<PLANE>`` entry per mask plane on the exposure.
+        a ``frac_<PLANE>`` entry per mask plane on the image, named as in
+        `lsst.images` (e.g. ``frac_SATURATED``).
     """
-    diff = butler.get(dataset_name, {"visit": visit, "detector": detector})
+    diff = get_visit_image(butler, dataset_name, {"visit": visit, "detector": detector},
+                           image_type="difference")
     stats = {"visit": visit, "detector": detector}
     stats.update(_basic_stats(diff.image.array))
     stats.update(_mask_plane_fractions(diff.mask))
@@ -156,15 +179,15 @@ class PixelCompareResult:
 
     Attributes
     ----------
-    img1, img2 : `lsst.afw.image.Exposure`
-        The two loaded exposures, in case the caller wants their masks/WCS.
+    img1, img2 : `lsst.images.DifferenceImage`
+        The two loaded images, in case the caller wants their masks/WCS.
     diff : `numpy.ndarray`
         Pixel array of ``img1 - img2``.
     ratio : `numpy.ndarray`
         Pixel array of ``img1 / img2``; NaN where ``img2 == 0``.
-    mask_diff : `numpy.ndarray`
-        XOR of the two mask arrays: nonzero pixels are where the mask planes
-        differ between the two images.
+    mask_diff : `numpy.ndarray` [`bool`]
+        True where at least one mask plane, matched by name, is set in only
+        one of the two images.
     summary : `dict`
         ``{"visit", "detector", "diff_median", "diff_mad", "diff_stddev",
         "n_mask_pixels_changed", "frac_mask_pixels_changed"}``.
@@ -182,7 +205,8 @@ def pixel_compare(butler1, butler2, visit, detector,
     """Compare two difference images for the same data id, pixel by pixel.
 
     Pull the same dataId from two butlers (or two collections of one butler)
-    and inspect the residuals.
+    and inspect the residuals. A legacy image is converted to `lsst.images`
+    form when read, so it can be compared with an `lsst.images` one.
 
     Parameters
     ----------
@@ -204,8 +228,9 @@ def pixel_compare(butler1, butler2, visit, detector,
         If the two loaded images differ in shape (cannot be aligned by simple
         subtraction).
     """
-    img1 = butler1.get(dataset_name, {"visit": visit, "detector": detector})
-    img2 = butler2.get(dataset_name, {"visit": visit, "detector": detector})
+    data_id = {"visit": visit, "detector": detector}
+    img1 = get_visit_image(butler1, dataset_name, data_id, image_type="difference")
+    img2 = get_visit_image(butler2, dataset_name, data_id, image_type="difference")
 
     a1 = img1.image.array
     a2 = img2.image.array
@@ -217,7 +242,7 @@ def pixel_compare(butler1, butler2, visit, detector,
     with np.errstate(divide="ignore", invalid="ignore"):
         ratio = np.where(a2 != 0, a1 / a2, np.nan)
 
-    mask_diff = img1.mask.array ^ img2.mask.array
+    mask_diff = _mask_difference(img1.mask, img2.mask)
 
     finite = _finite_view(diff)
     if finite.size:

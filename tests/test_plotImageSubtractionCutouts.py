@@ -25,6 +25,8 @@ import sys
 import tempfile
 import unittest
 
+import lsst.afw.cameraGeom.testUtils
+import lsst.afw.image
 import lsst.afw.table
 import lsst.geom
 import lsst.meas.base.tests
@@ -33,6 +35,7 @@ import numpy as np
 import pandas as pd
 import PIL
 from lsst.analysis.ap import plotImageSubtractionCutouts
+from lsst.analysis.ap.imageUtils import as_visit_image
 from lsst.meas.algorithms import SourceDetectionTask
 
 # Sky center chosen to test metadata annotations (3-digit RA and negative Dec).
@@ -87,6 +90,36 @@ DATA = pd.DataFrame(
 )
 
 
+def make_test_images():
+    """Make science, template and difference images with one source at the
+    center.
+
+    Returns
+    -------
+    legacy_science : `lsst.afw.image.ExposureF`
+        The science image as a legacy exposure, for source detection.
+    science : `lsst.images.VisitImage`
+        The science image.
+    template, difference : `lsst.images.DifferenceImage`
+        The template and difference images.
+    """
+    # CameraWrapper, unlike the TestDataset detector, has the amplifier
+    # geometry that lsst.images conversion needs.
+    detector = list(lsst.afw.cameraGeom.testUtils.CameraWrapper().camera)[0]
+    dataset = lsst.meas.base.tests.TestDataset(detector.getBBox(), crval=skyCenter)
+    dataset.addSource(instFlux=1e5, centroid=lsst.geom.Point2D(detector.getBBox().getCenter()))
+    science, _ = dataset.realize(noise=1000.0, schema=dataset.makeMinimalSchema())
+    template, _ = dataset.realize(noise=5.0, schema=dataset.makeMinimalSchema())
+    # A simple image difference to have something to plot.
+    difference = lsst.afw.image.ExposureF(science, deep=True)
+    difference.image -= template.image
+    for exposure in (science, template, difference):
+        exposure.setDetector(detector)
+        exposure.setFilter(lsst.afw.image.FilterLabel(band="r", physical="r_test"))
+    return (science, as_visit_image(science), as_visit_image(template, image_type="template"),
+            as_visit_image(difference, image_type="difference"))
+
+
 def make_mock_catalog(image):
     """Make a simple SourceCatalog from the image, containing Footprints.
     """
@@ -101,21 +134,8 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
     files correctly.
     """
     def setUp(self):
-        bbox = lsst.geom.Box2I(lsst.geom.Point2I(0, 0), lsst.geom.Point2I(100, 100))
-        # source at the center of the image
-        self.centroid = lsst.geom.Point2D(50, 50)
-        dataset = lsst.meas.base.tests.TestDataset(bbox, crval=skyCenter)
         self.scale = 0.3  # arbitrary arcseconds/pixel
-        dataset.addSource(instFlux=1e5, centroid=self.centroid)
-        self.science, self.scienceCat = dataset.realize(
-            noise=1000.0, schema=dataset.makeMinimalSchema()
-        )
-        self.template, self.templateCat = dataset.realize(
-            noise=5.0, schema=dataset.makeMinimalSchema()
-        )
-        # A simple image difference to have something to plot.
-        self.difference = lsst.afw.image.ExposureF(self.science, deep=True)
-        self.difference.image -= self.template.image
+        self.legacy_science, self.science, self.template, self.difference = make_test_images()
 
     def test_generate_image(self):
         """Test that we get some kind of image out.
@@ -285,10 +305,10 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
         """
         butler = unittest.mock.Mock(spec=lsst.daf.butler.Butler)
 
-        def mock_get(dataset, dataId, *args, **kwargs):
+        def mock_get(dataset, dataId=None, *args, **kwargs):
             if "_diaSrc" in dataset:
                 # The science image is the only mock image with a source in it.
-                catalog = make_mock_catalog(self.science)
+                catalog = make_mock_catalog(self.legacy_science)
                 # Assign the matching source id to the detection.
                 match = DATA["visit"] == dataId["visit"]
                 catalog["id"] = DATA["diaSourceId"].to_numpy()[match][0]
@@ -297,6 +317,8 @@ class TestPlotImageSubtractionCutouts(lsst.utils.tests.TestCase):
                 return self.science
 
         butler.get.side_effect = mock_get
+        # Images are read by reference; the dataset name serves as one here.
+        butler.find_dataset.side_effect = lambda dataset, dataId=None, **kwargs: dataset
 
         with tempfile.TemporaryDirectory() as path:
             config = plotImageSubtractionCutouts.PlotImageSubtractionCutoutsTask.ConfigClass()

@@ -41,10 +41,12 @@ import lsst.pex.config as pexConfig
 import lsst.pex.exceptions
 import lsst.pipe.base
 import lsst.utils
+from lsst.images import Box, NoOverlapError
 import numpy as np
 import pandas as pd
 
 from . import apdb
+from .imageUtils import as_visit_image, cutout, cutout_box, get_visit_image, pixel_scale
 
 _log = logging.getLogger(__name__)
 
@@ -71,12 +73,12 @@ class _ButlerCache:
         self._butler = butler
         self._config = config
         # Ensure the caches are empty if we've been re-set.
-        self.get_exposures.cache_clear()
+        self.get_images.cache_clear()
         self.get_catalog.cache_clear()
 
     @functools.lru_cache(maxsize=4)
-    def get_exposures(self, instrument, detector, visit):
-        """Return science, template, difference exposures, using a small
+    def get_images(self, instrument, detector, visit):
+        """Return science, template, difference images, using a small
         cache so we don't have to re-read files as often.
 
         Parameters
@@ -90,12 +92,13 @@ class _ButlerCache:
 
         Returns
         -------
-        exposures : `tuple` [`lsst.afw.image.ExposureF`]
-            Science, template, and difference exposure for this data id.
+        exposures : `tuple` [`lsst.images.VisitImage`]
+            Science, template, and difference image for this data id, with
+            legacy exposures converted by `get_visit_image`.
         """
         data_id = {'instrument': instrument, 'detector': detector, 'visit': visit}
         try:
-            science = self._butler.get(self._config.science_image_type, data_id)
+            science = get_visit_image(self._butler, self._config.science_image_type, data_id)
         except DatasetNotFoundError as e:
             _log.error(f"Cannot load {self._config.science_image_type} with data_id {data_id}: {e}")
             _log.error("If you are working with data processed earlier than May 2025, try setting "
@@ -103,11 +106,14 @@ class _ButlerCache:
             raise
 
         if self._config.diff_image_type is not None:
-            template = self._butler.get(f"{self._config.diff_image_type}_templateExp", data_id)
-            difference = self._butler.get(f"{self._config.diff_image_type}_differenceExp", data_id)
+            template_name = f"{self._config.diff_image_type}_templateExp"
+            difference_name = f"{self._config.diff_image_type}_differenceExp"
         else:
-            template = self._butler.get("template_detector", data_id)
-            difference = self._butler.get("difference_image", data_id)
+            template_name = "template_detector"
+            difference_name = "difference_image"
+        template = get_visit_image(self._butler, template_name, data_id, image_type="template",
+                                   detector=science.detector)
+        difference = get_visit_image(self._butler, difference_name, data_id, image_type="difference")
 
         return science, template, difference
 
@@ -339,9 +345,9 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         """
         try:
             center = lsst.geom.SpherePoint(source["ra"], source["dec"], lsst.geom.degrees)
-            science, template, difference = butler_cache.get_exposures(source["instrument"],
-                                                                       source["detector"],
-                                                                       source["visit"])
+            science, template, difference = butler_cache.get_images(source["instrument"],
+                                                                    source["detector"],
+                                                                    source["visit"])
             if self.config.use_footprint:
                 catalog = butler_cache.get_catalog(source["instrument"],
                                                    source["detector"],
@@ -356,7 +362,7 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
                 record = catalog.find(source['diaSourceId'])
                 footprint = record.getFootprint()
 
-            scale = science.wcs.getPixelScale(science.getBBox().getCenter()).asArcseconds()
+            scale = pixel_scale(science)
             image = self.generate_image(science, template, difference, center, scale,
                                         dia_source_id=source['diaSourceId'],
                                         save_as_numpy=self.config.save_as_numpy,
@@ -367,7 +373,7 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
                       f'{source["diaSourceId"]}.png'), "wb") as outfile:
                 outfile.write(image.getbuffer())
             return source["diaSourceId"]
-        except (LookupError, lsst.pex.exceptions.Exception) as e:
+        except (LookupError, NoOverlapError, lsst.pex.exceptions.Exception) as e:
             self.log.error(
                 f"{e.__class__.__name__} processing diaSourceId {source['diaSourceId']}: {e}"
             )
@@ -384,13 +390,13 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
 
         Parameters
         ----------
-        science : `lsst.afw.image.ExposureF`
-            Science exposure to include in the cutout.
-        template : `lsst.afw.image.ExposureF`
-            Matched template exposure to include in the cutout.
-        difference : `lsst.afw.image.ExposureF`
-             Matched science minus template exposure to include in the cutout.
-        center : `lsst.geom.SpherePoint`
+        science : `lsst.images.VisitImage`
+            Science image to include in the cutout.
+        template : `lsst.images.DifferenceImage`
+            Matched template image to include in the cutout.
+        difference : `lsst.images.DifferenceImage`
+             Matched science minus template image to include in the cutout.
+        center : `astropy.coordinates.SkyCoord` or `lsst.geom.SpherePoint`
             Center of the source to be cut out of each image.
         scale : `float`
             Pixel scale in arcseconds.
@@ -409,32 +415,35 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
         image: `io.BytesIO`
             The generated image, to be output to a file or displayed on screen.
         """
+        science = as_visit_image(science)
+        template = as_visit_image(template, image_type="template", detector=science.detector)
+        difference = as_visit_image(difference, image_type="difference")
         numpy_cutouts = {}
         if not self.config.use_footprint:
             sizes = self.config.sizes
             cutout_science, cutout_template, cutout_difference = [], [], []
             for i, s in enumerate(sizes):
-                extent = lsst.geom.Extent2I(s, s)
-                science_cutout = science.getCutout(center, extent)
-                template_cutout = template.getCutout(center, extent)
-                difference_cutout = difference.getCutout(center, extent)
+                science_cutout = cutout(science, center, s)
+                template_cutout = cutout(template, center, s)
+                difference_cutout = cutout(difference, center, s)
                 if save_as_numpy:
                     self.numpy_path.mkdir(dia_source_id)
-                    numpy_cutouts[f"sci_{s}"] = science_cutout.image.array
-                    numpy_cutouts[f"temp_{s}"] = template_cutout.image.array
-                    numpy_cutouts[f"diff_{s}"] = difference_cutout.image.array
-                    for cutout_type, cutout in numpy_cutouts.items():
+                    numpy_cutouts[f"sci_{s}"] = science_cutout.array
+                    numpy_cutouts[f"temp_{s}"] = template_cutout.array
+                    numpy_cutouts[f"diff_{s}"] = difference_cutout.array
+                    for cutout_type, array in numpy_cutouts.items():
                         outfile = self.numpy_path(dia_source_id, f'{dia_source_id}_{cutout_type}.npy')
-                        np.save(outfile, np.expand_dims(cutout, axis=0))
+                        np.save(outfile, np.expand_dims(array, axis=0))
                 cutout_science.append(science_cutout)
                 cutout_template.append(template_cutout)
                 cutout_difference.append(difference_cutout)
         else:
             if self.config.save_as_numpy:
                 raise RuntimeError("Cannot save as numpy when using footprints.")
-            cutout_science = [science.getCutout(footprint.getBBox())]
-            cutout_template = [template.getCutout(footprint.getBBox())]
-            cutout_difference = [difference.getCutout(footprint.getBBox())]
+            box = Box.from_legacy(footprint.getBBox())
+            cutout_science = [cutout_box(science, box)]
+            cutout_template = [cutout_box(template, box)]
+            cutout_difference = [cutout_box(difference, box)]
             extent = footprint.getBBox().getDimensions()
             # Plot a square equal to the largest dimension.
             sizes = [extent.x if extent.x > extent.y else extent.y]
@@ -451,12 +460,12 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
 
         Parameters
         ----------
-        science : `list` [`lsst.afw.image.ExposureF`]
-            List of cutout Science exposure(s) to include in the image.
-        template : `list` [`lsst.afw.image.ExposureF`]
-            List of cutout template exposure(s) to include in the image.
-        difference : `list` [`lsst.afw.image.ExposureF`]
-            List of cutout science minus template exposure(s) to include
+        science : `list` [`lsst.images.Image`]
+            List of cutout Science image(s) to include in the image.
+        template : `list` [`lsst.images.Image`]
+            List of cutout template image(s) to include in the image.
+        difference : `list` [`lsst.images.Image`]
+            List of cutout science minus template image(s) to include
             in the image.
         source : `numpy.record`, optional
             DiaSource record for this cutout, to add metadata to the image.
@@ -512,17 +521,17 @@ class PlotImageSubtractionCutoutsTask(lsst.pipe.base.Task):
             len_sizes = len(sizes)
             fig, axs = plt.subplots(len_sizes, 3, constrained_layout=True)
             if len_sizes == 1:
-                plot_one_image(axs[0], template[0].image.array, sizes[0], "Template")
-                plot_one_image(axs[1], science[0].image.array, sizes[0], "Science")
-                plot_one_image(axs[2], difference[0].image.array, sizes[0], "Difference")
+                plot_one_image(axs[0], template[0].array, sizes[0], "Template")
+                plot_one_image(axs[1], science[0].array, sizes[0], "Science")
+                plot_one_image(axs[2], difference[0].array, sizes[0], "Difference")
             else:
-                plot_one_image(axs[0][0], template[0].image.array, sizes[0], "Template")
-                plot_one_image(axs[0][1], science[0].image.array, sizes[0], "Science")
-                plot_one_image(axs[0][2], difference[0].image.array, sizes[0], "Difference")
+                plot_one_image(axs[0][0], template[0].array, sizes[0], "Template")
+                plot_one_image(axs[0][1], science[0].array, sizes[0], "Science")
+                plot_one_image(axs[0][2], difference[0].array, sizes[0], "Difference")
                 for i in range(1, len(axs)):
-                    plot_one_image(axs[i][0], template[i].image.array, sizes[i], None)
-                    plot_one_image(axs[i][1], science[i].image.array, sizes[i], None)
-                    plot_one_image(axs[i][2], difference[i].image.array, sizes[i], None)
+                    plot_one_image(axs[i][0], template[i].array, sizes[i], None)
+                    plot_one_image(axs[i][1], science[i].array, sizes[i], None)
+                    plot_one_image(axs[i][2], difference[i].array, sizes[i], None)
             if source is not None:
                 _annotate_image(fig, source, len_sizes)
 

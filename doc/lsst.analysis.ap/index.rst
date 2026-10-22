@@ -19,6 +19,7 @@ Using lsst.analysis.ap
    overview
    notebook-tools
    cutouts
+   compare-dia-sources
    ppdb
    runtimes
    template-inputs

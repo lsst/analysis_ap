@@ -48,8 +48,12 @@ import lsst.afw.display
 import lsst.afw.table
 import lsst.geom
 from lsst.daf.butler import DatasetNotFoundError
+from lsst.images import Box
 from lsst.analysis.ap import plotImageSubtractionCutouts
 from lsst.analysis.ap.compare import match_catalogs
+from lsst.analysis.ap.imageUtils import (
+    _box_edges, _pixel_to_sky, _sky_to_pixel, cutout, get_visit_image,
+)
 from lsst.analysis.ap.skymapOverlay import draw_skymap_outlines_afw
 # Polygon geometry shared with the skymap overlays; private to the
 # package, not to the module.
@@ -686,20 +690,15 @@ def _load_cutout(butler, row, *, size, image_type, image_datasets):
     label used in the cutout title.
 
     Loading is separated from rendering so callers that need to draw
-    the same cutout into multiple Axes can pay the butler.get + getCutout
-    cost once.
+    the same cutout into multiple Axes can pay the read and cutout cost
+    once.
     """
     import astropy.visualization as aviz
-    import lsst.geom
 
-    dataset = image_datasets[image_type]
     data_id = {"visit": int(row.visit), "detector": int(row.detector)}
-    exposure = butler.get(dataset, data_id)
-
-    center = lsst.geom.SpherePoint(row.ra, row.dec, lsst.geom.degrees)
-    extent = lsst.geom.Extent2I(size, size)
-    cutout = exposure.getCutout(center, extent)
-    data = cutout.image.array
+    image = _get_image(butler, image_datasets, image_type, data_id)
+    stamp = cutout(image, coord.SkyCoord(row.ra, row.dec, unit="deg"), size)
+    data = stamp.array
     ny, nx = data.shape
 
     if image_type == "difference":
@@ -716,8 +715,8 @@ def _load_cutout(butler, row, *, size, image_type, image_datasets):
 
     return {
         "data": data, "ny": ny, "nx": nx,
-        "wcs": cutout.wcs,
-        "x0": cutout.getX0(), "y0": cutout.getY0(),
+        "sky_projection": image.sky_projection,
+        "x0": stamp.bbox.x.start, "y0": stamp.bbox.y.start,
         "norm": norm,
         "image_type": image_type,
     }
@@ -751,7 +750,7 @@ def _render_cutout_axes(ax, row, cutout_data, sources,
     nx = cutout_data["nx"]
     x0 = cutout_data["x0"]
     y0 = cutout_data["y0"]
-    wcs = cutout_data["wcs"]
+    sky_projection = cutout_data["sky_projection"]
     norm = cutout_data["norm"]
     image_type = cutout_data["image_type"]
 
@@ -766,10 +765,7 @@ def _render_cutout_axes(ax, row, cutout_data, sources,
     # diaSource whose sky position falls inside this cutout
     # (regardless of which image it was detected on).
     if len(sources) > 0:
-        src_xs, src_ys = wcs.skyToPixelArray(
-            np.asarray(sources["ra"]),
-            np.asarray(sources["dec"]),
-            degrees=True)
+        src_xs, src_ys = _sky_to_pixel(sky_projection, sources["ra"], sources["dec"])
         src_xs = src_xs - x0
         src_ys = src_ys - y0
         src_in_frame = (
@@ -807,7 +803,7 @@ def _render_cutout_axes(ax, row, cutout_data, sources,
                    label="other diaSource")
 
     if len(obj_ids) > 0:
-        xs, ys = wcs.skyToPixelArray(obj_ras, obj_decs, degrees=True)
+        xs, ys = _sky_to_pixel(sky_projection, obj_ras, obj_decs)
         xs = xs - x0
         ys = ys - y0
         in_bounds = (xs >= 0) & (xs < nx) & (ys >= 0) & (ys < ny)
@@ -1095,6 +1091,22 @@ def plot_objects_sharing_sources(diaObjectId, sources1, sources2,
 def get_xy_from_source_table(table, wcs, degrees=None):
     """Convert ra/dec coordinates in an astropy table/pandas data frame to
     pixel x/y positions.
+
+    Parameters
+    ----------
+    table : `astropy.table.Table` or `pandas.DataFrame`
+        Sources with ``ra``/``dec`` (degrees) or ``coord_ra``/``coord_dec``
+        (radians) columns.
+    wcs : `lsst.images.SkyProjection` or `lsst.afw.geom.SkyWcs`
+        Transform from sky to pixel coordinates.
+    degrees : `bool`, optional
+        Whether the coordinates are in degrees; inferred from the column
+        names if not given.
+
+    Returns
+    -------
+    xy : `astropy.table.Table`
+        Pixel positions, in columns ``x`` and ``y``.
     """
     try:
         ra = table['ra']
@@ -1107,7 +1119,9 @@ def get_xy_from_source_table(table, wcs, degrees=None):
     if degrees is None:
         degrees = inferred_degrees
 
-    x, y = wcs.skyToPixelArray(ra, dec, degrees=degrees)
+    if not degrees:
+        ra, dec = np.degrees(ra), np.degrees(dec)
+    x, y = _sky_to_pixel(wcs, ra, dec)
     return astropy.table.Table.from_pandas(pd.DataFrame({'x': x, 'y': y}))
 
 
@@ -1551,6 +1565,72 @@ def _draw_overlays_on_current_frame(afw_display, overlays,
                                 size=label_size, ctype="cyan")
 
 
+def _get_image(butler, image_datasets, image_type, data_id):
+    """Read one AP image in `lsst.images` form.
+
+    Parameters
+    ----------
+    butler : `lsst.daf.butler.Butler`
+        Butler to read from.
+    image_datasets : `dict` [`str`, `str`]
+        Mapping from image type to dataset name.
+    image_type : {"science", "template", "difference"}
+        Image to read.
+    data_id : `dict`
+        Data ID of the image.
+
+    Returns
+    -------
+    image : `lsst.images.VisitImage`
+        The image; a legacy template is given the science image's
+        detector, which it lacks.
+    """
+    detector = None
+    if image_type == "template":
+        detector = butler.get(f"{image_datasets['science']}.detector", data_id)
+    return get_visit_image(butler, image_datasets[image_type], data_id, image_type=image_type,
+                           detector=detector)
+
+
+def _science_bbox(butler, image_datasets, data_id):
+    """Read the bounding box of a science image as an `lsst.images.Box`."""
+    bbox = butler.get(f"{image_datasets['science']}.bbox", data_id)
+    return Box.from_legacy(bbox) if isinstance(bbox, lsst.geom.Box2I) else bbox
+
+
+def _legacy_for_display(image):
+    """Return the legacy form of an image, which afw displays take."""
+    return image.to_legacy() if hasattr(image, "to_legacy") else image
+
+
+def _show_image(afw_display, image, title, strip_metadata):
+    """Show an image on the current frame of an afw display.
+
+    Parameters
+    ----------
+    afw_display : `lsst.afw.display.Display`
+        Display to draw on.
+    image : `lsst.images.MaskedImage`, `lsst.images.cells.CellCoadd`, or \
+            `lsst.afw.image.Exposure`
+        Image to show; afw displays take only the legacy form, so an
+        `lsst.images` image is converted.
+    title : `str`
+        Frame title.
+    strip_metadata : `bool`
+        Drop ``LTV1``/``LTV2`` from the shown exposure's metadata.
+
+    Returns
+    -------
+    exposure : `lsst.afw.image.Exposure`
+        The exposure sent to the display.
+    """
+    exposure = _legacy_for_display(image)
+    if strip_metadata:
+        _strip_ds9_metadata(exposure)
+    afw_display.image(exposure, title=title)
+    return exposure
+
+
 def _strip_ds9_metadata(*exposures):
     """Drop LTV1/LTV2 keys from each exposure's metadata in place."""
     for exp in exposures:
@@ -1741,16 +1821,15 @@ def display_images(butler, visit, detector, backend="firefly", *,
     use_footprints = _resolve_unfiltered_footprints(
         unfiltered_style, backend, color_by)
 
-    diffim = butler.get(image_datasets["difference"], data_id)
-    science = butler.get(image_datasets["science"], data_id)
-    template = butler.get(image_datasets["template"], data_id)
-    template = template[science.getBBox()]
-    if strip_metadata:
-        _strip_ds9_metadata(science, diffim, template)
+    diffim = _get_image(butler, image_datasets, "difference", data_id)
+    science = _get_image(butler, image_datasets, "science", data_id)
+    template = get_visit_image(butler, image_datasets["template"], data_id, image_type="template",
+                               detector=science.detector)
+    template = template[science.bbox]
     images = {"science": science, "template": template, "difference": diffim}
 
     data = _collect_overlays(
-        butler, data_id, diffim.wcs,
+        butler, data_id, diffim.sky_projection,
         reliability_threshold=reliability_threshold,
         show_unfiltered=show_unfiltered,
         show_trailed=show_trailed, show_rejected=show_rejected,
@@ -1781,8 +1860,7 @@ def display_images(butler, visit, detector, backend="firefly", *,
         # Wipe any markers left over from a previous call — `image()`
         # only replaces the pixel data, region overlays persist otherwise.
         _erase_current_frame_regions(afw_display)
-        image = images[image_name]
-        afw_display.image(image, title=image_name)
+        exposure = _show_image(afw_display, images[image_name], image_name, strip_metadata)
         _draw_overlays_on_current_frame(
             afw_display, data.overlays, data.reliability_labels,
             data.solar_system_labels,
@@ -1796,7 +1874,7 @@ def display_images(butler, visit, detector, backend="firefly", *,
                 afw_display, data.unfiltered_footprints,
                 style="outline", layer_prefix=f"{image_name} unfiltered")
         if skymap is not None:
-            draw_skymap_outlines_afw(afw_display, skymap, image.wcs, image.getBBox(),
+            draw_skymap_outlines_afw(afw_display, skymap, exposure.wcs, exposure.getBBox(),
                                      ctype=skymap_ctype, label_size=skymap_label_size)
 
     try:
@@ -1868,20 +1946,15 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
         raise ValueError(
             f"image_type must be one of {sorted(image_datasets)}, got {image_type!r}")
     image_datasets = _apply_fakes_prefix(image_datasets, use_fakes)
-    dataset = image_datasets[image_type]
     data_id = {"visit": visit, "detector": detector}
 
-    image_a = butler_a.get(dataset, data_id)
-    image_b = butler_b.get(dataset, data_id)
+    image_a = _get_image(butler_a, image_datasets, image_type, data_id)
+    image_b = _get_image(butler_b, image_datasets, image_type, data_id)
     if image_type == "template":
         # Templates are usually larger than the science footprint; clip them
         # to the science bbox so the two frames have matching extents.
-        sci_a = butler_a.get(image_datasets["science"], data_id)
-        sci_b = butler_b.get(image_datasets["science"], data_id)
-        image_a = image_a[sci_a.getBBox()]
-        image_b = image_b[sci_b.getBBox()]
-    if strip_metadata:
-        _strip_ds9_metadata(image_a, image_b)
+        image_a = image_a[_science_bbox(butler_a, image_datasets, data_id)]
+        image_b = image_b[_science_bbox(butler_b, image_datasets, data_id)]
 
     use_footprints = _resolve_unfiltered_footprints(
         unfiltered_style, backend, color_by)
@@ -1900,8 +1973,8 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
         color_by=color_by,
         unfiltered_as_footprints=use_footprints,
     )
-    data_a = _collect_overlays(butler_a, data_id, image_a.wcs, **common)
-    data_b = _collect_overlays(butler_b, data_id, image_b.wcs, **common)
+    data_a = _collect_overlays(butler_a, data_id, image_a.sky_projection, **common)
+    data_b = _collect_overlays(butler_b, data_id, image_b.sky_projection, **common)
 
     label_a, label_b = labels
     print(f"visit={visit}, detector={detector}: A/B comparison of {image_type!r}")
@@ -1923,7 +1996,7 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
         # Wipe any markers left over from a previous call — `image()`
         # only replaces the pixel data, region overlays persist otherwise.
         _erase_current_frame_regions(afw_display)
-        afw_display.image(image, title=f"{image_type} ({tag})")
+        exposure = _show_image(afw_display, image, f"{image_type} ({tag})", strip_metadata)
         _draw_overlays_on_current_frame(afw_display, data.overlays,
                                         data.reliability_labels,
                                         data.solar_system_labels,
@@ -1937,7 +2010,7 @@ def display_images_ab(butler_a, butler_b, visit, detector, *,
                 afw_display, data.unfiltered_footprints,
                 style="outline", layer_prefix=f"{tag} unfiltered")
         if skymap is not None:
-            draw_skymap_outlines_afw(afw_display, skymap, image.wcs, image.getBBox(),
+            draw_skymap_outlines_afw(afw_display, skymap, exposure.wcs, exposure.getBBox(),
                                      ctype=skymap_ctype, label_size=skymap_label_size)
 
     try:
@@ -1952,8 +2025,6 @@ class _PatchCoverage:
 
     tract: int
     patch: int
-    record: Any
-    """Exposure record from the template's ``coaddInputs.ccds``."""
     ref: Any
     """`lsst.daf.butler.DatasetRef` of the coadd, or None if not found."""
     corners_xy: list
@@ -2055,29 +2126,115 @@ def _query_coadd_refs(butler, coadd_dataset, band, keys, skymap_name=None):
     return refs
 
 
+def _coadd_geometry(butler, ref):
+    """Read the bounding box and WCS of a coadd without its pixels.
+
+    Parameters
+    ----------
+    butler : `lsst.daf.butler.Butler`
+        Butler to read from.
+    ref : `lsst.daf.butler.DatasetRef`
+        Reference to the coadd, stored as an afw exposure or an
+        `lsst.images.cells.CellCoadd`.
+
+    Returns
+    -------
+    bbox : `lsst.geom.Box2I`
+        Bounding box of the coadd.
+    wcs : `lsst.afw.geom.SkyWcs`
+        WCS of the coadd.
+    """
+    components = ref.datasetType.storageClass.allComponents()
+    wcs_component = "wcs" if "wcs" in components else "sky_projection"
+    wcs = butler.get(ref.makeComponentRef(wcs_component), storageClass="Wcs")
+    bbox = butler.get(ref.makeComponentRef("bbox"), storageClass="Box2I")
+    return bbox, wcs
+
+
+def _template_patch_outlines(butler, template_dataset, data_id, wcs, *,
+                             coadd_dataset, band, skymap_name=None):
+    """Outline and coadd of each patch recorded as a template input.
+
+    A template stored as an `lsst.images.DifferenceImage` records the
+    butler ID of each coadd it used, in its ``templates`` component. A
+    legacy template records only the tract and patch, in its
+    ``coaddInputs`` component, so its coadds are looked up by data ID.
+
+    Parameters
+    ----------
+    butler : `lsst.daf.butler.Butler`
+        Butler to load from.
+    template_dataset : `str`
+        Dataset name of the template (e.g. ``"template_detector"``).
+    data_id : `dict`
+        Data id of the template.
+    wcs : `lsst.images.SkyProjection`
+        Sky projection of the difference image the outlines are drawn on.
+    coadd_dataset : `str`
+        Dataset name of the coadds; used only for a legacy template.
+    band : `str`
+        Band of the coadds; used only for a legacy template.
+    skymap_name : `str`, optional
+        Skymap of the coadds; used only for a legacy template.
+
+    Returns
+    -------
+    outlines : `dict` [`tuple` [`int`, `int`], `list` [`tuple`]]
+        ``(x, y)`` corners of each patch in difference-image pixels, keyed
+        on ``(tract, patch)`` and sorted. For a coadd missing from the
+        butler, the outline of an `lsst.images` template covers only the
+        part of the patch that overlaps the difference image.
+    refs : `dict` [`tuple` [`int`, `int`], `lsst.daf.butler.DatasetRef`]
+        Refs of the coadds that exist, keyed on ``(tract, patch)``.
+    """
+    components = butler.get_dataset_type(template_dataset).storageClass.allComponents()
+    if "templates" not in components:
+        patches = _coadd_input_patches(butler, template_dataset, data_id)
+        outlines = {key: _project_bbox_corners(record.getBBox(), record.getWcs(), wcs)
+                    for key, record in patches.items()}
+        refs = (_query_coadd_refs(butler, coadd_dataset, band, patches, skymap_name)
+                if patches else {})
+        return outlines, refs
+
+    outlines = {}
+    refs = {}
+    templates = butler.get(f"{template_dataset}.templates", data_id)
+    for info in sorted(templates, key=lambda info: (info.tract, info.patch)):
+        key = (info.tract, info.patch)
+        ref = butler.get_dataset(info.dataset_id)
+        if ref is None:
+            # The bounds are already in difference-image pixels; drop the
+            # closing vertex, which repeats the first.
+            corners = list(zip(info.bounds.x_vertices.tolist(), info.bounds.y_vertices.tolist()))
+            outlines[key] = corners[:-1] if corners[0] == corners[-1] else corners
+        else:
+            refs[key] = ref
+            outlines[key] = _project_bbox_corners(*_coadd_geometry(butler, ref), wcs)
+    return outlines, refs
+
+
 def _project_bbox_corners(bbox, from_wcs, to_wcs):
     """Corners of a bounding box mapped from one pixel grid to another.
 
-    ``bbox`` is in ``from_wcs``'s pixel system; the returned ``(x, y)``
-    corners are in ``to_wcs``'s parent pixel system.
+    ``bbox`` (an `lsst.images.Box` or `lsst.geom.Box2I`) is in
+    ``from_wcs``'s pixel system; the returned ``(x, y)`` corners, taken at
+    the outer pixel edges, are in ``to_wcs``'s parent pixel system. Each
+    transform is an `lsst.images.SkyProjection` or `lsst.afw.geom.SkyWcs`.
     """
-    corners = []
-    for corner in lsst.geom.Box2D(bbox).getCorners():
-        point = to_wcs.skyToPixel(from_wcs.pixelToSky(corner))
-        corners.append((point.getX(), point.getY()))
-    return corners
+    x_min, x_max, y_min, y_max = _box_edges(bbox)
+    ra, dec = _pixel_to_sky(from_wcs, [x_min, x_max, x_max, x_min], [y_min, y_min, y_max, y_max])
+    xs, ys = _sky_to_pixel(to_wcs, ra, dec)
+    return [(float(x), float(y)) for x, y in zip(xs, ys)]
 
 
 def _rect_from_bbox(bbox):
     """``(xmin, xmax, ymin, ymax)`` clip rectangle of a bounding box.
 
-    Taken at the box's outer pixel edges (the `lsst.geom.Box2D`
-    convention) so that clipped areas are comparable with
-    ``Box2D.getArea()``; the integer ``Box2I`` limits would be a half
+    Taken at the box's outer pixel edges so that clipped areas are
+    comparable with the box's area; the integer limits would be a half
     pixel short on each side.
     """
-    box = lsst.geom.Box2D(bbox)
-    return (box.getMinX(), box.getMaxX(), box.getMinY(), box.getMaxY())
+    return _box_edges(bbox)
 
 
 def _draw_outline_on_current_frame(afw_display, corners, ctype, *, label=None,
@@ -2150,9 +2307,11 @@ def display_coadd_coverage(butler, visit, detector, backend="firefly", *,
     the coadd patches themselves, one per frame in ``(tract, patch)``
     order, each with the difference image's footprint outlined on it.
 
-    The contributing patches are read from the template's ``coaddInputs``,
-    which `~lsst.ip.diffim.GetTemplateTask` fills with one record per
-    patch that supplied valid pixels. That is a stricter set than a skymap
+    The contributing patches are read from the template's ``templates``
+    component (an `lsst.images.DifferenceImage`) or ``coaddInputs``
+    component (a legacy exposure), which `~lsst.ip.diffim.GetTemplateTask`
+    fills with one record per patch that supplied valid pixels. That is a
+    stricter set than a skymap
     lookup would give: patches that overlap the detector geometrically but
     contributed nothing were already dropped when the template was built.
 
@@ -2180,8 +2339,9 @@ def display_coadd_coverage(butler, visit, detector, backend="firefly", *,
     show_patch_outlines : `bool`, optional
         If True, outline each contributing patch on the difference-image
         frame, labeled ``tract,patch``. Outlines are drawn for missing
-        coadds too, since the geometry comes from the template's records
-        rather than from the coadd itself.
+        coadds too, from the template's records; for an `lsst.images`
+        template such an outline covers only the part of the patch that
+        overlaps the difference image.
     diffim_ctype : `str`, optional
         Display color for the difference-image outline. The patch outlines
         cycle through a fixed palette instead, so that a patch's color on
@@ -2207,12 +2367,13 @@ def display_coadd_coverage(butler, visit, detector, backend="firefly", *,
     image_datasets : `dict` [`str`, `str`], optional
         Mapping from image-type key (``"science"``, ``"template"``,
         ``"difference"``) to butler dataset name. Only the ``"template"``
-        and ``"difference"`` entries are used here; the template is read
-        as a ``.coaddInputs`` component, so its pixels are never loaded.
+        and ``"difference"`` entries are used here; only the template's
+        record of its inputs is read, so its pixels are never loaded.
     coadd_dataset : `str`, optional
         Dataset name of the coadds the template was built from. The
         default matches what ``ApPipe.yaml`` binds to the template task's
-        ``coaddExposures`` input.
+        ``coaddExposures`` input. Ignored for an `lsst.images` template,
+        which records the butler ID of each coadd.
     dry_run : `bool`, optional
         If True, work out which patches contributed and print the legend,
         but skip constructing the afw display and loading any pixels.
@@ -2225,28 +2386,25 @@ def display_coadd_coverage(butler, visit, detector, backend="firefly", *,
     data_id = {"visit": visit, "detector": detector}
     header = f"visit={visit}, detector={detector} -- "
 
-    patches = _coadd_input_patches(butler, image_datasets["template"], data_id)
-    if not patches:
+    diffim = _get_image(butler, image_datasets, "difference", data_id)
+    bbox = diffim.bbox
+    clip_rect = _rect_from_bbox(bbox)
+    diffim_area = bbox.area
+    band = diffim.band
+    outlines, refs = _template_patch_outlines(
+        butler, image_datasets["template"], data_id, diffim.sky_projection,
+        coadd_dataset=coadd_dataset, band=band, skymap_name=skymap_name)
+    if not outlines:
         print(f"{header}template records no coadd inputs; showing the "
               "difference image only.")
 
-    diffim = butler.get(image_datasets["difference"], data_id)
-    bbox = diffim.getBBox()
-    clip_rect = _rect_from_bbox(bbox)
-    diffim_area = lsst.geom.Box2D(bbox).getArea()
-    band = diffim.filter.bandLabel
-    refs = (_query_coadd_refs(butler, coadd_dataset, band, patches, skymap_name)
-            if patches else {})
-
     coverages = []
     frame = 1
-    for i, ((tract, patch), record) in enumerate(patches.items()):
-        corners = _project_bbox_corners(record.getBBox(), record.getWcs(),
-                                        diffim.wcs)
+    for i, ((tract, patch), corners) in enumerate(outlines.items()):
         overlap = _polygon_area(_clip_polygon_to_rect(corners, *clip_rect))
         ref = refs.get((tract, patch))
         coverages.append(_PatchCoverage(
-            tract=tract, patch=patch, record=record, ref=ref,
+            tract=tract, patch=patch, ref=ref,
             corners_xy=corners, overlap=overlap/diffim_area,
             color=_FLAG_PALETTE[i % len(_FLAG_PALETTE)],
             frame=None if ref is None else frame))
@@ -2264,8 +2422,6 @@ def display_coadd_coverage(butler, visit, detector, backend="firefly", *,
     if dry_run:
         return
 
-    if strip_metadata:
-        _strip_ds9_metadata(diffim)
     afw_display = lsst.afw.display.Display(backend=backend)
     if mask_transparency is not None:
         afw_display.setMaskTransparency(mask_transparency)
@@ -2274,7 +2430,7 @@ def display_coadd_coverage(butler, visit, detector, backend="firefly", *,
     # Wipe any markers left over from a previous call — `image()`
     # only replaces the pixel data, region overlays persist otherwise.
     _erase_current_frame_regions(afw_display)
-    afw_display.image(diffim, title="difference")
+    _show_image(afw_display, diffim, "difference", strip_metadata)
     if show_patch_outlines:
         with afw_display.Buffering():
             for cov in coverages:
@@ -2286,17 +2442,17 @@ def display_coadd_coverage(butler, visit, detector, backend="firefly", *,
     for cov in coverages:
         if cov.ref is None:
             continue
-        coadd = butler.get(cov.ref)
+        # A coadd is only displayed, so it is read in the legacy form that
+        # afw displays take.
+        coadd = _legacy_for_display(butler.get(cov.ref))
         # Project after loading rather than reusing the record's wcs, so
         # the outline is tied to the pixels actually on screen.
-        corners = _project_bbox_corners(bbox, diffim.wcs, coadd.wcs)
+        corners = _project_bbox_corners(bbox, diffim.sky_projection, coadd.wcs)
         if patch_extent == "overlap":
             coadd = _subset_coadd_to_outline(coadd, corners, patch_margin)
-        if strip_metadata:
-            _strip_ds9_metadata(coadd)
         afw_display.frame = cov.frame
         _erase_current_frame_regions(afw_display)
-        afw_display.image(coadd, title=f"{cov.tract},{cov.patch}")
+        _show_image(afw_display, coadd, f"{cov.tract},{cov.patch}", strip_metadata)
         if show_diffim_outline:
             _draw_outline_on_current_frame(
                 afw_display, corners, diffim_ctype,
@@ -2501,8 +2657,8 @@ def display_footprints(butler=None, visit=None, detector=None,
     backend : `str`, optional
         afw display backend. Only ``"firefly"`` is supported, since the
         overlay uses Firefly's native footprint rendering.
-    exposure : `lsst.afw.image.Exposure`, optional
-        Exposure to draw on, supplied directly instead of via the butler.
+    exposure : `lsst.images.VisitImage` or `lsst.afw.image.Exposure`, optional
+        Image to draw on, supplied directly instead of via the butler.
         Must be given together with ``catalog``; when set, ``butler``,
         ``visit``, ``detector``, ``catalog_dataset``, ``image_type``, and
         ``image_datasets`` are all ignored.
@@ -2560,13 +2716,11 @@ def display_footprints(butler=None, visit=None, detector=None,
                 f"image_type must be one of {sorted(image_datasets)}, "
                 f"got {image_type!r}")
         data_id = {"visit": visit, "detector": detector}
-        exposure = butler.get(image_datasets[image_type], data_id)
+        exposure = _get_image(butler, image_datasets, image_type, data_id)
         catalog = butler.get(catalog_dataset, data_id)
         title = f"{image_type} footprints"
         location = f"visit={visit}, detector={detector}: "
 
-    if strip_metadata:
-        _strip_ds9_metadata(exposure)
     if not isinstance(catalog, lsst.afw.table.SourceCatalog):
         raise TypeError(
             f"catalog is a {type(catalog).__name__}, not an afw "
@@ -2594,7 +2748,7 @@ def display_footprints(butler=None, visit=None, detector=None,
     afw_display.frame = frame
     # image() only replaces pixel data; wipe stale region markers first.
     _erase_current_frame_regions(afw_display)
-    afw_display.image(exposure, title=title)
+    _show_image(afw_display, exposure, title, strip_metadata)
 
     print(f"{location}{len(catalog)} footprints in {len(groups)} colors")
     buckets = [(_subset_catalog(catalog, groups[c]), palette[c], f"c{c}")

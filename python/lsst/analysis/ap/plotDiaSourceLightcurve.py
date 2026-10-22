@@ -212,13 +212,13 @@ class PlotDiaSourceLightcurveTask(PlotImageSubtractionCutoutsTask):
                 ax.set_title(name)
 
         try:
-            plot_one_image(cutout_axes[0][0], template[0].image.array, sizes[0], "Template")
-            plot_one_image(cutout_axes[0][1], science[0].image.array, sizes[0], "Science")
-            plot_one_image(cutout_axes[0][2], difference[0].image.array, sizes[0], "Difference")
+            plot_one_image(cutout_axes[0][0], template[0].array, sizes[0], "Template")
+            plot_one_image(cutout_axes[0][1], science[0].array, sizes[0], "Science")
+            plot_one_image(cutout_axes[0][2], difference[0].array, sizes[0], "Difference")
             for i in range(1, len_sizes):
-                plot_one_image(cutout_axes[i][0], template[i].image.array, sizes[i], None)
-                plot_one_image(cutout_axes[i][1], science[i].image.array, sizes[i], None)
-                plot_one_image(cutout_axes[i][2], difference[i].image.array, sizes[i], None)
+                plot_one_image(cutout_axes[i][0], template[i].array, sizes[i], None)
+                plot_one_image(cutout_axes[i][1], science[i].array, sizes[i], None)
+                plot_one_image(cutout_axes[i][2], difference[i].array, sizes[i], None)
 
             self._draw_lightcurve(lc_ax, sources_lc, forced_lc, current_source=source)
 
